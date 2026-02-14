@@ -1,0 +1,7 @@
+{
+  "name": " Update PROJECT 1 - Healthy Meal Planner",
+  "description": "A smart, responsive meal planning application that calculates your daily calorie needs and helps you organize balanced breakfast, lunch, and dinner plans with a soft green and white aesthetic.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
