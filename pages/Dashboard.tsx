@@ -21,7 +21,9 @@ const Dashboard: React.FC = () => {
 
   const [viewWeekStart, setViewWeekStart] = useState<Date>(getInitialMonday());
 
-  const currentPlan = plans[selectedDate];
+  const userKey = user?.id || 'public';
+  const userPlans = plans[userKey] || {};
+  const currentPlan = userPlans[selectedDate];
 
   const totalCalories = currentPlan 
     ? (currentPlan.breakfast?.calories || 0) + 
@@ -198,7 +200,7 @@ const Dashboard: React.FC = () => {
             const dayLabel = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
             const isToday = dateStr === todayISO;
             const isSelected = dateStr === selectedDate;
-            const dayPlan = plans[dateStr] || {};
+            const dayPlan = userPlans[dateStr] || {};
 
             return (
               <div 

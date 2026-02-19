@@ -74,7 +74,7 @@ export interface AuthContextType {
   updateProfile: (data: Partial<User>) => Promise<void>;
   logWeight: (weight: number) => Promise<void>;
   isLoading: boolean;
-  plans: Record<string, DailyPlan>;
+  plans: Record<string, Record<string, DailyPlan>>;
   selectedDate: string;
   setSelectedDate: (date: string) => void;
   updateWaterIntake: (amount: number, date?: string) => void;

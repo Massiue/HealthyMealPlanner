@@ -18,8 +18,11 @@ const ProgressPage: React.FC = () => {
 
   const weeklyDates = getWeeklyDates();
 
+  const userKey = user?.id || 'public';
+  const userPlans = plans[userKey] || {};
+
   const weeklyData = weeklyDates.map(date => {
-    const plan = plans[date];
+    const plan = userPlans[date];
     const cals = plan 
       ? (plan.breakfast?.calories || 0) + (plan.lunch?.calories || 0) + (plan.dinner?.calories || 0) 
       : 0;

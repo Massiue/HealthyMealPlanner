@@ -48,9 +48,20 @@ const App: React.FC = () => {
     }];
   };
 
-  const [plans, setPlans] = useState<Record<string, DailyPlan>>(() => {
+  const [plans, setPlans] = useState<Record<string, Record<string, DailyPlan>>>(() => {
     const saved = localStorage.getItem('nutriplan_plans');
-    return saved ? JSON.parse(saved) : {};
+    if (!saved) return {};
+    try {
+      const parsed = JSON.parse(saved);
+      // If the stored shape is the old format (date -> DailyPlan), wrap it under a public key
+      const firstKey = Object.keys(parsed)[0];
+      if (firstKey && parsed[firstKey] && parsed[firstKey].date) {
+        return { public: parsed } as Record<string, Record<string, DailyPlan>>;
+      }
+      return parsed as Record<string, Record<string, DailyPlan>>;
+    } catch (e) {
+      return {};
+    }
   });
 
   const [meals, setMeals] = useState<Meal[]>(() => {
@@ -170,22 +181,28 @@ const App: React.FC = () => {
 
   const addMealToPlan = async (meal: Meal) => {
     const date = selectedDate;
-    const plan = plans[date] || { date, waterIntake: 0 };
+    const userKey = user?.id || 'public';
+    const userPlans = plans[userKey] || {};
+    const plan = userPlans[date] || { date, waterIntake: 0 };
     const updatedPlan = { ...plan, [meal.mealType.toLowerCase()]: meal };
-    setPlans(prev => ({ ...prev, [date]: updatedPlan }));
+    setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: updatedPlan } }));
   };
 
   const removeMealFromPlan = async (type: MealType) => {
     const date = selectedDate;
-    const plan = { ...plans[date] };
+    const userKey = user?.id || 'public';
+    const userPlans = plans[userKey] || {};
+    const plan = { ...(userPlans[date] || {}) };
     delete (plan as any)[type.toLowerCase()];
-    setPlans(prev => ({ ...prev, [date]: plan }));
+    setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: plan } }));
   };
 
   const updateWaterIntake = async (amount: number, date: string = selectedDate) => {
-    const plan = plans[date] || { date, waterIntake: 0 };
+    const userKey = user?.id || 'public';
+    const userPlans = plans[userKey] || {};
+    const plan = userPlans[date] || { date, waterIntake: 0 };
     const updatedPlan = { ...plan, waterIntake: Math.max(0, amount) };
-    setPlans(prev => ({ ...prev, [date]: updatedPlan }));
+    setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: updatedPlan } }));
   };
 
   const addGlobalMeal = (meal: Meal) => {
@@ -216,8 +233,8 @@ const App: React.FC = () => {
           <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
           <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <RegisterPage />} />
           <Route path="/dashboard" element={user ? <Layout onLogout={logout}><Dashboard /></Layout> : <Navigate to="/login" replace />} />
-          <Route path="/recommendations" element={user ? <Layout onLogout={logout}><MealRecommendations onAddMeal={addMealToPlan} currentPlan={plans[selectedDate] || {date:selectedDate,waterIntake:0}} /></Layout> : <Navigate to="/login" replace />} />
-          <Route path="/planner" element={user ? <Layout onLogout={logout}><MealPlanPage currentPlan={plans[selectedDate] || {date:selectedDate,waterIntake:0}} onRemoveMeal={removeMealFromPlan} /></Layout> : <Navigate to="/login" replace />} />
+          <Route path="/recommendations" element={user ? <Layout onLogout={logout}><MealRecommendations onAddMeal={addMealToPlan} currentPlan={(plans[user?.id || 'public'] && plans[user?.id || 'public'][selectedDate]) || {date:selectedDate,waterIntake:0}} /></Layout> : <Navigate to="/login" replace />} />
+          <Route path="/planner" element={user ? <Layout onLogout={logout}><MealPlanPage currentPlan={(plans[user?.id || 'public'] && plans[user?.id || 'public'][selectedDate]) || {date:selectedDate,waterIntake:0}} onRemoveMeal={removeMealFromPlan} /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/progress" element={user ? <Layout onLogout={logout}><ProgressPage /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/profile" element={user ? <Layout onLogout={logout}><ProfilePage /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/admin" element={user?.role === 'admin' ? <Layout onLogout={logout}><AdminDashboard /></Layout> : <Navigate to="/dashboard" replace />} />
