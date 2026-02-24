@@ -355,7 +355,7 @@ const AdminDashboard: React.FC = () => {
             </div>
             <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">Recipe Library</p>
             <div className="text-6xl font-black text-slate-900 mb-2">{stats.mealCount}</div>
-            <p className="text-sm text-slate-500 font-medium">Mock + database meals</p>
+            <p className="text-sm text-slate-500 font-medium">meals</p>
           </div>
         </div>
       )}
