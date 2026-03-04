@@ -50,3 +50,33 @@ Structure:
 ├── README.md
 │
 └── node_modules/
+
+---------------------------------------
+Backend API Structure:
+
+GET /api/meals
+POST /api/login
+PUT /api/plans
+DELETE /api/meals/:id
+
+--------------------------------------
+Clear Separation of Routes, Controllers, and Services:
+
+backend/
+│
+├── server.js
+├── routes/
+│     mealRoutes.js
+│     userRoutes.js
+│
+├── controllers/
+│     mealController.js
+│     userController.js
+│
+├── services/
+│     mealService.js
+│     userService.js
+│
+└── database/
+      db.js
+      -----------------------------------------
