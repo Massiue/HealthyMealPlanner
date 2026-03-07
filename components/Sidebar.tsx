@@ -14,6 +14,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onLogout }) => {
     { name: 'Dashboard', icon: 'fa-chart-pie', path: '/dashboard' },
     { name: 'Meal Planner', icon: 'fa-calendar-days', path: '/planner' },
     { name: 'Recommendations', icon: 'fa-utensils', path: '/recommendations' },
+    { name: 'Nutrition Chatbot', icon: 'fa-robot', path: '/chatbot' },
     { name: 'Progress', icon: 'fa-chart-line', path: '/progress' },
     { name: 'Profile', icon: 'fa-user', path: '/profile' },
   ];

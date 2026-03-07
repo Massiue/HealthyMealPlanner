@@ -11,6 +11,7 @@ import MealPlanPage from './pages/MealPlanPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminDashboard from './pages/AdminDashboard';
 import ProgressPage from './pages/ProgressPage';
+import NutritionChatbotPage from './pages/NutritionChatbotPage';
 import { MOCK_MEALS } from './constants';
 
 export const AuthContext = createContext<AuthContextType>({} as AuthContextType);
@@ -318,6 +319,7 @@ const App: React.FC = () => {
           <Route path="/planner" element={user ? <Layout onLogout={logout}><MealPlanPage currentPlan={(plans[user?.id || 'public'] && plans[user?.id || 'public'][selectedDate]) || {date:selectedDate,waterIntake:0}} onRemoveMeal={removeMealFromPlan} /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/progress" element={user ? <Layout onLogout={logout}><ProgressPage /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/profile" element={user ? <Layout onLogout={logout}><ProfilePage /></Layout> : <Navigate to="/login" replace />} />
+          <Route path="/chatbot" element={user ? <Layout onLogout={logout}><NutritionChatbotPage /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/admin" element={user?.role === 'admin' ? <Layout onLogout={logout}><AdminDashboard /></Layout> : <Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -247,6 +247,506 @@ const adminOnly = (req, res, next) => {
   });
 };
 
+const getMacroProteinMultiplier = (goal) => {
+  switch (goal) {
+    case "Muscle Gain":
+      return 1.8;
+    case "Weight Loss":
+      return 1.6;
+    case "Weight Gain":
+      return 1.5;
+    default:
+      return 1.2;
+  }
+};
+
+const extractWeightFromMessage = (message) => {
+  const regex = /(\d+(?:\.\d+)?)\s?(kg|kgs|kilograms?)\b/i;
+  const match = message.match(regex);
+  if (!match) return null;
+  const weight = Number(match[1]);
+  return Number.isFinite(weight) ? weight : null;
+};
+
+const getBmr = ({ weight, height, age, gender }) => {
+  if (!weight || !height || !age || !gender) return null;
+  if (gender === "male") return 10 * weight + 6.25 * height - 5 * age + 5;
+  if (gender === "female") return 10 * weight + 6.25 * height - 5 * age - 161;
+  return 10 * weight + 6.25 * height - 5 * age - 78;
+};
+
+const getActivityMultiplier = (activityLevel) => {
+  const parsed = Number(activityLevel);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.2;
+};
+
+const getMealSlotFromMessage = (message) => {
+  const text = String(message || "").toLowerCase();
+  if (/breakfast|morning/.test(text)) return "breakfast";
+  if (/lunch|afternoon/.test(text)) return "lunch";
+  if (/dinner|supper|night/.test(text)) return "dinner";
+  if (/snack/.test(text)) return "snack";
+  return "meal";
+};
+
+const getMealShare = (slot) => {
+  if (slot === "breakfast") return 0.25;
+  if (slot === "lunch") return 0.35;
+  if (slot === "dinner") return 0.3;
+  if (slot === "snack") return 0.1;
+  return 0.3;
+};
+
+const getDietPreferenceFromMessage = (message) => {
+  const text = String(message || "").toLowerCase();
+  if (/\b(non[-\s]?veg|non\sveg|nonveg|nonvegetarian|non-vegetarian)\b/.test(text)) {
+    return "non_veg";
+  }
+  if (/\b(veg|vegetarian|vegan|plant[-\s]?based)\b/.test(text)) return "veg";
+  return null;
+};
+
+const shuffle = (items) => {
+  const next = [...items];
+  for (let i = next.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+};
+
+const normalizeMealType = (value) => String(value || "").toLowerCase();
+
+const isMealTypeMatch = (mealType, slot) => {
+  const mt = normalizeMealType(mealType);
+  if (slot === "meal") return true;
+  return mt.includes(slot);
+};
+
+const buildFallbackOptions = (slot, goal, preference = null) => {
+  const vegBySlot = {
+    breakfast: [
+      "oats with milk, nuts, and banana",
+      "besan chilla with mint chutney",
+      "Greek yogurt bowl with fruit and seeds",
+    ],
+    lunch: [
+      "paneer tikka with brown rice and salad",
+      "dal, chapati, mixed vegetables, and curd",
+      "quinoa bowl with chickpeas and sauteed vegetables",
+    ],
+    dinner: [
+      "grilled tofu with vegetables and soup",
+      "paneer curry with a small serving of rice",
+      "lentil soup with stir-fried vegetables and salad",
+    ],
+    snack: [
+      "roasted chana with buttermilk",
+      "fruit with peanut butter",
+      "sprouts chaat with lemon",
+    ],
+    meal: [
+      "grilled protein + whole grains + vegetables",
+      "dal + chapati + salad + curd",
+      "paneer/tofu bowl with rice and veggies",
+    ],
+  };
+
+  const nonVegBySlot = {
+    breakfast: [
+      "egg omelette with whole-grain toast and fruit",
+      "boiled eggs with oats and milk",
+      "chicken sandwich on whole-grain bread",
+    ],
+    lunch: [
+      "grilled chicken with brown rice and vegetables",
+      "fish curry with rice and salad",
+      "chicken wrap with yogurt dip",
+    ],
+    dinner: [
+      "grilled fish with sauteed vegetables and soup",
+      "chicken curry with a small serving of rice",
+      "egg bhurji with chapati and salad",
+    ],
+    snack: [
+      "boiled eggs and buttermilk",
+      "tuna sandwich on whole-grain bread",
+      "chicken soup cup",
+    ],
+    meal: [
+      "grilled chicken/fish + whole grains + vegetables",
+      "egg dish + chapati + salad",
+      "chicken bowl with rice and veggies",
+    ],
+  };
+
+  const source = preference === "non_veg" ? nonVegBySlot : vegBySlot;
+  const options = source[slot] || source.meal;
+  if (goal === "Muscle Gain") {
+    return options.map((o) => `${o} (add extra protein portion)`);
+  }
+  if (goal === "Weight Loss") {
+    return options.map((o) => `${o} (keep oil low and increase vegetables)`);
+  }
+  return options;
+};
+
+const mealMatchesPreference = (meal, preference) => {
+  if (!preference) return true;
+  const tag = String(meal?.dietTag || "").toLowerCase();
+  const name = String(meal?.mealName || "").toLowerCase();
+  const nonVegHint = /(chicken|fish|mutton|beef|pork|egg|prawn|shrimp|tuna|seafood|steak)/.test(
+    `${tag} ${name}`
+  );
+  const vegHint = /(veg|vegetarian|vegan|plant|paneer|tofu|dal|lentil|chickpea|chole|idli|sambar)/.test(
+    `${tag} ${name}`
+  );
+
+  if (preference === "veg") {
+    if (nonVegHint) return false;
+    if (tag.includes("non veg") || tag.includes("non-veg")) return false;
+    return true;
+  }
+
+  if (preference === "non_veg") {
+    if (nonVegHint || tag.includes("non veg") || tag.includes("non-veg")) return true;
+    if (vegHint || tag.includes("veg") || tag.includes("vegetarian") || tag.includes("vegan")) {
+      return false;
+    }
+    return false;
+  }
+
+  return true;
+};
+
+const pickMealsFromRecommendations = ({
+  meals,
+  slot,
+  targetCalories,
+  targetProtein,
+  goal,
+  preference = null,
+  limit = 3,
+}) => {
+  const typed = (Array.isArray(meals) ? meals : []).filter((m) => isMealTypeMatch(m?.mealType, slot));
+  const pool = typed.length ? typed : Array.isArray(meals) ? meals : [];
+  const filtered = pool.filter((meal) => mealMatchesPreference(meal, preference));
+  if (!filtered.length) return [];
+
+  const scored = filtered
+    .map((meal) => {
+      const calories = Number(meal?.calories || 0);
+      const protein = Number(meal?.protein || 0);
+      const calorieScore = targetCalories ? Math.abs(calories - targetCalories) / Math.max(targetCalories, 1) : 0;
+      const proteinGap = targetProtein ? Math.max(0, targetProtein - protein) / Math.max(targetProtein, 1) : 0;
+
+      let goalAdjust = 0;
+      if (goal === "Weight Loss" && targetCalories && calories > targetCalories * 1.2) goalAdjust += 0.6;
+      if (goal === "Muscle Gain" && targetProtein) goalAdjust += Math.max(0, (targetProtein - protein) / Math.max(targetProtein, 1));
+      if (goal === "Weight Gain" && targetCalories) goalAdjust += calories < targetCalories ? 0.4 : -0.1;
+
+      return {
+        meal,
+        score: calorieScore + proteinGap + goalAdjust,
+      };
+    })
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 8);
+
+  return shuffle(scored)
+    .slice(0, limit)
+    .map((entry) => entry.meal);
+};
+
+const parseIntent = (message) => {
+  const text = String(message || "").toLowerCase();
+
+  if (/juice|smoothie|beverage|drink|drinks/.test(text)) return "beverage";
+  if (/protein|proteins|gram.*protein|how much protein/.test(text)) return "protein";
+  if (/calorie|calories|kcal|energy|maintenance/.test(text)) return "calories";
+  if (/water|hydration|hydrate|liters|litres/.test(text)) return "hydration";
+  if (/bmi|body mass index/.test(text)) return "bmi";
+  if (/macro|carb|fat/.test(text)) return "macros";
+  if (/meal plan|full day|whole day|today.?s plan|diet chart|plan for today/.test(text)) {
+    return "daily_plan";
+  }
+  if (
+    /what can i eat|what should i eat|what kind of food|which food|food.*consume|consume.*food|suggest|recommend|meal idea|diet plan|today.?s?\s+(breakfast|lunch|dinner)|for (breakfast|lunch|dinner|snack)|\b(breakfast|lunch|dinner|snack)\b|another food|different food|other food|give.*food|more options/.test(
+      text
+    )
+  ) {
+    return "meal_suggestion";
+  }
+  if (/meal|food|eat|eating|drink|drinks|beverage|beverages|juice|smoothie|dish|recipe|ingredient|diet|nutrition/.test(text)) {
+    return "food_general";
+  }
+  return "general";
+};
+
+const isMealOrFoodQuestion = (message) => {
+  const text = String(message || "").toLowerCase();
+  if (!text) return false;
+
+  return /(meal|food|eat|eating|drink|drinks|beverage|beverages|juice|smoothie|fruit juice|breakfast|lunch|dinner|snack|dish|recipe|ingredient|calorie|calories|kcal|protein|carb|carbs|fat|nutrition|diet|hydration|hydrate|water)/.test(
+    text
+  );
+};
+
+const buildNutritionReply = (message, user, availableMeals = []) => {
+  const intent = parseIntent(message);
+  const messageWeight = extractWeightFromMessage(message);
+  const weight = messageWeight || Number(user?.weight || 0) || null;
+
+  if (intent === "beverage") {
+    const goal = String(user?.goal || "Maintain Weight");
+    const dailyCalories = Number(user?.dailyCalories || 0);
+
+    let suggestions = "orange juice, watermelon juice, and lemon-mint juice";
+    let guidance = "Prefer 1 small glass (200-250 ml), no added sugar.";
+
+    if (goal === "Weight Loss") {
+      suggestions = "lemon water, cucumber-mint juice, and diluted amla juice";
+      guidance = "Keep portions small and avoid packed or sweetened juices.";
+    } else if (goal === "Muscle Gain") {
+      suggestions = "banana smoothie with milk, mango yogurt smoothie, and dates-badam shake";
+      guidance = "Use whole fruit and include a protein source like milk or yogurt.";
+    } else if (goal === "Weight Gain") {
+      suggestions = "banana-peanut smoothie, chikoo milkshake, and mango lassi";
+      guidance = "Add calorie-dense ingredients like nuts or seeds.";
+    }
+
+    const calorieNote = dailyCalories
+      ? `This fits your target of about ${dailyCalories} kcal/day.`
+      : "Pair juice with a balanced meal for better satiety.";
+
+    return {
+      intent,
+      reply: `You can choose: ${suggestions}. ${guidance} ${calorieNote}`,
+    };
+  }
+
+  if (intent === "protein") {
+    if (!weight) {
+      return {
+        intent,
+        reply:
+          "I can calculate your protein target if you share your weight in kg. Example: I weigh 70kg.",
+      };
+    }
+    const multiplier = getMacroProteinMultiplier(user?.goal);
+    const grams = Math.round(weight * multiplier);
+    return {
+      intent,
+      reply: `Based on your weight (${weight}kg), you should consume about ${grams}g protein daily.`,
+    };
+  }
+
+  if (intent === "calories") {
+    const bmr = getBmr(user || {});
+    if (!bmr) {
+      return {
+        intent,
+        reply:
+          "I can estimate calories if your profile has age, gender, height, and weight. Update your profile and ask again.",
+      };
+    }
+    const tdee = Math.round(bmr * getActivityMultiplier(user?.activityLevel));
+    return {
+      intent,
+      reply: `Your estimated maintenance intake is around ${tdee} kcal/day based on your profile.`,
+    };
+  }
+
+  if (intent === "hydration") {
+    if (!weight) {
+      return {
+        intent,
+        reply:
+          "General hydration target is 2.5-3.5L per day. Share your weight in kg for a personalized estimate.",
+      };
+    }
+    const liters = Math.max(1.5, Math.min(6, Number((weight * 0.035).toFixed(1))));
+    return {
+      intent,
+      reply: `A practical hydration target for ${weight}kg is about ${liters}L of water daily.`,
+    };
+  }
+
+  if (intent === "bmi") {
+    const w = weight || Number(user?.weight || 0) || null;
+    const hCm = Number(user?.height || 0) || null;
+    if (!w || !hCm) {
+      return {
+        intent,
+        reply:
+          "I can calculate BMI if your profile includes both height (cm) and weight (kg).",
+      };
+    }
+    const hM = hCm / 100;
+    const bmi = Number((w / (hM * hM)).toFixed(1));
+    return {
+      intent,
+      reply: `Your estimated BMI is ${bmi}. For most adults, 18.5 to 24.9 is the typical healthy range.`,
+    };
+  }
+
+  if (intent === "macros") {
+    if (!weight) {
+      return {
+        intent,
+        reply:
+          "A simple macro split is 30% protein, 40% carbs, 30% fats. Share weight or calorie target for exact grams.",
+      };
+    }
+    const protein = Math.round(weight * getMacroProteinMultiplier(user?.goal));
+    return {
+      intent,
+      reply: `A good starting point is protein ${protein}g/day, then split remaining calories across carbs and fats based on preference.`,
+    };
+  }
+
+  if (intent === "meal_suggestion") {
+    const slot = getMealSlotFromMessage(message);
+    const slotLabel = slot === "meal" ? "meal" : slot;
+    const preference = getDietPreferenceFromMessage(message);
+    const goal = String(user?.goal || "Maintain Weight");
+    const totalCalories = Number(user?.dailyCalories || 0);
+    const totalProtein = Number(user?.dailyProtein || 0);
+    const share = getMealShare(slot);
+
+    const fallbackProtein = weight
+      ? Math.round(weight * getMacroProteinMultiplier(user?.goal))
+      : 80;
+    const targetCalories = totalCalories ? Math.round(totalCalories * share) : null;
+    const targetProtein = Math.max(
+      15,
+      Math.round((totalProtein || fallbackProtein) * share)
+    );
+
+    const picks = pickMealsFromRecommendations({
+      meals: availableMeals,
+      slot,
+      targetCalories,
+      targetProtein,
+      goal,
+      preference,
+      limit: 3,
+    });
+    const fallback = shuffle(buildFallbackOptions(slot, goal, preference)).slice(0, 3);
+
+    const calorieLine = targetCalories
+      ? `Target about ${targetCalories} kcal and ${targetProtein}g protein for this ${slotLabel}.`
+      : `Aim for around ${targetProtein}g protein in this ${slotLabel} based on your profile.`;
+
+    if (picks.length) {
+      const options = picks
+        .map(
+          (meal, idx) =>
+            `${idx + 1}. ${meal.mealName} (${Number(meal.calories || 0)} kcal, ${Number(
+              meal.protein || 0
+            )}g protein)`
+        )
+        .join(" ");
+      return {
+        intent,
+        reply: `For today's ${slotLabel}, try: ${options} ${calorieLine}`,
+      };
+    }
+
+    return {
+      intent,
+      reply: `For today's ${slotLabel}, try: 1. ${fallback[0]} 2. ${fallback[1]} 3. ${fallback[2]} ${calorieLine}`,
+    };
+  }
+
+  if (intent === "daily_plan") {
+    const goal = String(user?.goal || "Maintain Weight");
+    const preference = getDietPreferenceFromMessage(message);
+    const weightValue = Number(user?.weight || 0);
+    const proteinDay =
+      Number(user?.dailyProtein || 0) ||
+      (weightValue ? Math.round(weightValue * getMacroProteinMultiplier(user?.goal)) : 80);
+
+    const breakfast = pickMealsFromRecommendations({
+      meals: availableMeals,
+      slot: "breakfast",
+      targetCalories: Number(user?.dailyCalories || 0) ? Math.round(Number(user.dailyCalories) * 0.25) : 0,
+      targetProtein: Math.round(proteinDay * 0.25),
+      goal,
+      preference,
+      limit: 1,
+    })[0];
+    const lunch = pickMealsFromRecommendations({
+      meals: availableMeals,
+      slot: "lunch",
+      targetCalories: Number(user?.dailyCalories || 0) ? Math.round(Number(user.dailyCalories) * 0.35) : 0,
+      targetProtein: Math.round(proteinDay * 0.35),
+      goal,
+      preference,
+      limit: 1,
+    })[0];
+    const dinner = pickMealsFromRecommendations({
+      meals: availableMeals,
+      slot: "dinner",
+      targetCalories: Number(user?.dailyCalories || 0) ? Math.round(Number(user.dailyCalories) * 0.3) : 0,
+      targetProtein: Math.round(proteinDay * 0.3),
+      goal,
+      preference,
+      limit: 1,
+    })[0];
+
+    const fbBreakfast = shuffle(buildFallbackOptions("breakfast", goal, preference))[0];
+    const fbLunch = shuffle(buildFallbackOptions("lunch", goal, preference))[0];
+    const fbDinner = shuffle(buildFallbackOptions("dinner", goal, preference))[0];
+
+    return {
+      intent,
+      reply: `Today's plan: Breakfast - ${breakfast?.mealName || fbBreakfast}; Lunch - ${
+        lunch?.mealName || fbLunch
+      }; Dinner - ${dinner?.mealName || fbDinner}. This is personalized to your ${
+        user?.goal || "health"
+      } goal${availableMeals.length ? ` using ${availableMeals.length} meals from recommendations` : ""}.`,
+    };
+  }
+
+  if (intent === "food_general") {
+    const goal = String(user?.goal || "Maintain Weight");
+    const weight = Number(user?.weight || 0);
+    const dailyCalories = Number(user?.dailyCalories || 0);
+    const proteinTarget =
+      Number(user?.dailyProtein || 0) ||
+      (weight ? Math.round(weight * getMacroProteinMultiplier(user?.goal)) : 80);
+
+    let focus =
+      "build meals with lean protein, high-fiber carbs, vegetables, and healthy fats";
+    if (goal === "Weight Loss") {
+      focus =
+        "prioritize high-protein, high-fiber, lower-calorie foods and avoid sugary drinks";
+    } else if (goal === "Muscle Gain") {
+      focus =
+        "eat protein-rich meals with complex carbs and include a protein source in every meal";
+    } else if (goal === "Weight Gain") {
+      focus =
+        "choose calorie-dense but nutritious foods like rice, dairy, nuts, and protein-rich meals";
+    }
+
+    const targetLine = dailyCalories
+      ? `Your profile target is about ${dailyCalories} kcal/day and ${proteinTarget}g protein/day.`
+      : `A good target for you is around ${proteinTarget}g protein/day with balanced meals.`;
+
+    return {
+      intent,
+      reply: `Based on your profile, ${focus}. ${targetLine}`,
+    };
+  }
+
+  return {
+    intent,
+    reply:
+      "Ask me nutrition questions like: protein target, calorie needs, hydration, BMI, or macro planning.",
+  };
+};
+
 // -------------------- ENV CHECK ROUTE --------------------
 app.get("/api/env-check", (req, res) => {
   res.json({
@@ -385,6 +885,41 @@ app.get("/api/me", authenticate, (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!row) return res.status(404).json({ error: "User not found" });
       res.json(sanitizeUser(row));
+    }
+  );
+});
+
+app.post("/api/chatbot/nutrition", authenticate, (req, res) => {
+  const message = String(req.body?.message || "").trim();
+  if (!message) return res.status(400).json({ error: "Message is required" });
+  if (!isMealOrFoodQuestion(message)) {
+    return res.json({
+      success: true,
+      intent: "blocked",
+      reply: "I only answer meal and food related questions.",
+    });
+  }
+
+  db.get(
+    `SELECT age, gender, height, weight, activityLevel, goal, dailyCalories, dailyProtein, dailyWater
+     FROM users
+     WHERE id = ?`,
+    [req.user.id],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      db.all(
+        `SELECT id, mealName, mealType, calories, protein, dietTag
+         FROM meals`,
+        (mealErr, mealRows) => {
+          if (mealErr) return res.status(500).json({ error: mealErr.message });
+          const result = buildNutritionReply(message, row || {}, mealRows || []);
+          res.json({
+            success: true,
+            reply: result.reply,
+            intent: result.intent,
+          });
+        }
+      );
     }
   );
 });
