@@ -56,6 +56,7 @@ export interface Meal {
   protein: number;
   imageUrl: string;
   dietTag: string;
+  createdAt?: string;
 }
 
 export interface DailyPlan {

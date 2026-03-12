@@ -1,12 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useContext } from 'react';
 import Markdown from 'react-markdown';
 import { Send, Bot, User as UserIcon, Loader2, Trash2, History, MoreVertical } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Meal, MealType } from '../types';
+import { AuthContext } from '../App';
 
 interface Message {
+  id: string;
   role: 'user' | 'bot';
   content: string;
   timestamp: Date;
+  suggestedMeals?: Meal[];
+  assignmentState?: 'pending' | 'assigned' | 'dismissed';
+  selectedSuggestedMealIndex?: number;
 }
 
 interface ChatHistoryItem {
@@ -16,25 +22,62 @@ interface ChatHistoryItem {
   timestamp: string;
 }
 
+interface StoredMessage {
+  id: string;
+  role: 'user' | 'bot';
+  content: string;
+  timestamp: string;
+  suggestedMeals?: Meal[];
+  assignmentState?: 'pending' | 'assigned' | 'dismissed';
+  selectedSuggestedMealIndex?: number;
+}
+
+interface NutritionChatbotPageProps {
+  onAssignMeal: (meal: Meal) => Promise<void>;
+}
+
 const API_BASE = '/api';
 const HISTORY_LIMIT = 10;
 
-const QUICK_QUESTIONS = [
-  'What should I eat for breakfast?',
-  'Suggest a high-protein meal.',
-  'How many calories should I eat daily?',
-];
+const normalizeSuggestedMeal = (raw: any): Meal | null => {
+  const normalizedMealType = String(raw?.mealType || '').toLowerCase();
+  const mealType =
+    normalizedMealType === 'breakfast'
+      ? MealType.BREAKFAST
+      : normalizedMealType === 'dinner'
+        ? MealType.DINNER
+        : MealType.LUNCH;
 
-const NutritionChatbotPage: React.FC = () => {
+  if (!raw?.id || !raw?.mealName) {
+    return null;
+  }
+
+  return {
+    id: String(raw.id),
+    mealName: String(raw.mealName),
+    mealType,
+    calories: Number(raw?.calories || 0),
+    protein: Number(raw?.protein || 0),
+    imageUrl: String(raw?.imageUrl || ''),
+    dietTag: String(raw?.dietTag || 'Vegetarian'),
+  };
+};
+
+const NutritionChatbotPage: React.FC<NutritionChatbotPageProps> = ({ onAssignMeal }) => {
+  const { user } = useContext(AuthContext);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [assigningMealId, setAssigningMealId] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatHistoryItem[]>([]);
   const [showHistoryMenu, setShowHistoryMenu] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const token = localStorage.getItem('nutriplan_token') || '';
-  const historyStorageKey = token ? `nutriplan_chat_history_${token.slice(-12)}` : '';
+  const storageUserKey = user?.id || 'anonymous';
+  const chatStorageKey = `nutriplan_chat_messages_${storageUserKey}`;
+  const draftStorageKey = `nutriplan_chat_draft_${storageUserKey}`;
+  const historyStorageKey = `nutriplan_chat_history_${storageUserKey}`;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -43,6 +86,51 @@ const NutritionChatbotPage: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    if (!chatStorageKey) return;
+    try {
+      const raw = localStorage.getItem(chatStorageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) {
+        setMessages(
+          parsed
+            .filter(
+              (item): item is StoredMessage =>
+                Boolean(item) &&
+                (item.role === 'user' || item.role === 'bot') &&
+                typeof item.content === 'string' &&
+                typeof item.timestamp === 'string'
+            )
+            .map((item) => ({
+              id: typeof item.id === 'string' ? item.id : `${item.role}-${item.timestamp}`,
+              role: item.role,
+              content: item.content,
+              timestamp: new Date(item.timestamp),
+              suggestedMeals: Array.isArray(item.suggestedMeals)
+                ? item.suggestedMeals.map(normalizeSuggestedMeal).filter((meal): meal is Meal => Boolean(meal))
+                : undefined,
+              assignmentState:
+                item.assignmentState === 'assigned' || item.assignmentState === 'dismissed'
+                  ? item.assignmentState
+                  : 'pending',
+              selectedSuggestedMealIndex:
+                typeof item.selectedSuggestedMealIndex === 'number' ? item.selectedSuggestedMealIndex : 0,
+            }))
+        );
+      }
+    } catch {
+      setMessages([]);
+    }
+  }, [chatStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    const storedDraft = localStorage.getItem(draftStorageKey);
+    if (storedDraft !== null) {
+      setInput(storedDraft);
+    }
+  }, [draftStorageKey]);
 
   useEffect(() => {
     if (!historyStorageKey) return;
@@ -58,6 +146,29 @@ const NutritionChatbotPage: React.FC = () => {
   }, [historyStorageKey]);
 
   useEffect(() => {
+    if (!chatStorageKey) return;
+    localStorage.setItem(
+      chatStorageKey,
+      JSON.stringify(
+        messages.map((message) => ({
+          role: message.role,
+          id: message.id,
+          content: message.content,
+          timestamp: message.timestamp.toISOString(),
+          suggestedMeals: message.suggestedMeals,
+          assignmentState: message.assignmentState,
+          selectedSuggestedMealIndex: message.selectedSuggestedMealIndex,
+        }))
+      )
+    );
+  }, [messages, chatStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    localStorage.setItem(draftStorageKey, input);
+  }, [input, draftStorageKey]);
+
+  useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
       if (!showHistoryMenu) return;
       const target = event.target as Node;
@@ -71,9 +182,10 @@ const NutritionChatbotPage: React.FC = () => {
   }, [showHistoryMenu]);
 
   const persistHistory = (items: ChatHistoryItem[]) => {
-    setHistory(items);
+    const nextItems = items.slice(0, HISTORY_LIMIT);
+    setHistory(nextItems);
     if (!historyStorageKey) return;
-    localStorage.setItem(historyStorageKey, JSON.stringify(items.slice(0, HISTORY_LIMIT)));
+    localStorage.setItem(historyStorageKey, JSON.stringify(nextItems));
   };
 
   const handleSend = async () => {
@@ -81,6 +193,7 @@ const NutritionChatbotPage: React.FC = () => {
     if (!trimmed || isLoading) return;
 
     const userMessage: Message = {
+      id: `user-${Date.now()}`,
       role: 'user',
       content: trimmed,
       timestamp: new Date(),
@@ -105,11 +218,20 @@ const NutritionChatbotPage: React.FC = () => {
         response.ok && payload?.reply
           ? String(payload.reply)
           : String(payload?.error || "I'm sorry, I couldn't process that request.");
+      const suggestedMeals = Array.isArray(payload?.suggestedMeals)
+        ? payload.suggestedMeals
+            .map(normalizeSuggestedMeal)
+            .filter((meal): meal is Meal => Boolean(meal))
+        : [];
 
       const botMessage: Message = {
+        id: `bot-${Date.now()}`,
         role: 'bot',
         content: botReply,
         timestamp: new Date(),
+        suggestedMeals: suggestedMeals.length ? suggestedMeals : undefined,
+        assignmentState: suggestedMeals.length ? 'pending' : undefined,
+        selectedSuggestedMealIndex: 0,
       };
 
       setMessages((prev) => [...prev, botMessage]);
@@ -121,12 +243,13 @@ const NutritionChatbotPage: React.FC = () => {
           response: String(payload.reply),
           timestamp: new Date().toISOString(),
         };
-        persistHistory([newHistoryItem, ...history].slice(0, HISTORY_LIMIT));
+        persistHistory([newHistoryItem, ...history]);
       }
     } catch {
       setMessages((prev) => [
         ...prev,
         {
+          id: `bot-error-${Date.now()}`,
           role: 'bot',
           content: 'Sorry, I encountered an error. Please try again later.',
           timestamp: new Date(),
@@ -139,6 +262,43 @@ const NutritionChatbotPage: React.FC = () => {
 
   const clearChat = () => {
     setMessages([]);
+    setInput('');
+    if (chatStorageKey) {
+      localStorage.removeItem(chatStorageKey);
+    }
+    if (draftStorageKey) {
+      localStorage.removeItem(draftStorageKey);
+    }
+  };
+
+  const updateMessageAssignmentState = (messageId: string, assignmentState: 'pending' | 'assigned' | 'dismissed') => {
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? { ...message, assignmentState }
+          : message
+      )
+    );
+  };
+
+  const updateSelectedSuggestedMeal = (messageId: string, selectedSuggestedMealIndex: number) => {
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === messageId
+          ? { ...message, selectedSuggestedMealIndex, assignmentState: 'pending' }
+          : message
+      )
+    );
+  };
+
+  const handleAssignMeal = async (messageId: string, meal: Meal) => {
+    try {
+      setAssigningMealId(meal.id);
+      await onAssignMeal(meal);
+      updateMessageAssignmentState(messageId, 'assigned');
+    } finally {
+      setAssigningMealId(null);
+    }
   };
 
   return (
@@ -153,7 +313,7 @@ const NutritionChatbotPage: React.FC = () => {
             <p className="text-emerald-100 text-sm">Personalized health and diet assistant</p>
           </div>
         </div>
-        <div ref={historyMenuRef} className="flex items-center gap-2">
+        <div ref={historyMenuRef} className="relative flex items-center gap-2">
           <button
             onClick={clearChat}
             className="p-2 text-emerald-100 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
@@ -168,75 +328,54 @@ const NutritionChatbotPage: React.FC = () => {
           >
             <MoreVertical size={20} />
           </button>
+          {showHistoryMenu && (
+            <div className="absolute right-0 top-[56px] z-20 w-[min(92vw,420px)] bg-white border border-emerald-100 rounded-2xl shadow-xl p-4">
+              <h2 className="text-sm font-bold text-emerald-800 mb-3 flex items-center gap-2">
+                <History size={14} className="text-emerald-600" />
+                Recent History
+              </h2>
+              {history.length === 0 ? (
+                <p className="text-xs text-slate-500">No recent history yet.</p>
+              ) : (
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+                  {history.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="w-full text-left bg-emerald-50/50 hover:bg-emerald-100/60 border border-emerald-100 p-3 rounded-xl transition-colors"
+                      onClick={() => {
+                        setMessages((prev) => [
+                          ...prev,
+                          { id: `history-user-${item.id}`, role: 'user', content: item.query, timestamp: new Date(item.timestamp) },
+                          { id: `history-bot-${item.id}`, role: 'bot', content: item.response, timestamp: new Date(item.timestamp) },
+                        ]);
+                        setShowHistoryMenu(false);
+                      }}
+                    >
+                      <p className="text-xs font-semibold text-emerald-700 line-clamp-1">{item.query}</p>
+                      <p className="text-[11px] text-slate-600 line-clamp-2 mt-1">{item.response}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {history.length > 0 && (
+                <button
+                  onClick={() => persistHistory([])}
+                  className="mt-3 text-[11px] text-emerald-600 hover:text-emerald-700 font-medium underline"
+                >
+                  Clear all history
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {showHistoryMenu && (
-        <div className="absolute right-4 top-[88px] z-20 w-[min(92vw,420px)] bg-white border border-emerald-100 rounded-2xl shadow-xl p-4">
-          <h2 className="text-sm font-bold text-emerald-800 mb-3 flex items-center gap-2">
-            <History size={14} className="text-emerald-600" />
-            Recent History
-          </h2>
-          {history.length === 0 ? (
-            <p className="text-xs text-slate-500">No recent history yet.</p>
-          ) : (
-            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
-              {history.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="w-full text-left bg-emerald-50/50 hover:bg-emerald-100/60 border border-emerald-100 p-3 rounded-xl transition-colors"
-                  onClick={() => {
-                    setMessages((prev) => [
-                      ...prev,
-                      { role: 'user', content: item.query, timestamp: new Date(item.timestamp) },
-                      { role: 'bot', content: item.response, timestamp: new Date(item.timestamp) },
-                    ]);
-                    setShowHistoryMenu(false);
-                  }}
-                >
-                  <p className="text-xs font-semibold text-emerald-700 line-clamp-1">{item.query}</p>
-                  <p className="text-[11px] text-slate-600 line-clamp-2 mt-1">{item.response}</p>
-                </button>
-              ))}
-            </div>
-          )}
-          {history.length > 0 && (
-            <button
-              onClick={() => persistHistory([])}
-              className="mt-3 text-[11px] text-emerald-600 hover:text-emerald-700 font-medium underline"
-            >
-              Clear all history
-            </button>
-          )}
-        </div>
-      )}
-
       <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-emerald-50/30">
-        {messages.length === 0 && (
-          <div className="space-y-4">
-            <div className="bg-white border border-emerald-100 rounded-2xl p-4 md:p-5">
-              <h3 className="text-xs md:text-sm font-semibold text-emerald-800 mb-3">Try asking</h3>
-              <div className="flex flex-wrap gap-2">
-                {QUICK_QUESTIONS.map((question) => (
-                  <button
-                    key={question}
-                    type="button"
-                    onClick={() => setInput(question)}
-                    className="text-xs md:text-sm px-3 py-2 rounded-full border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 transition-colors"
-                  >
-                    {question}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
         <AnimatePresence initial={false}>
-          {messages.map((msg, index) => (
+          {messages.map((msg) => (
             <motion.div
-              key={`${msg.role}-${index}-${msg.timestamp.getTime()}`}
+              key={msg.id}
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -259,6 +398,59 @@ const NutritionChatbotPage: React.FC = () => {
                       <Markdown>{msg.content}</Markdown>
                     </div>
                   </div>
+                  {msg.role === 'bot' && msg.suggestedMeals && msg.suggestedMeals.length > 0 && (
+                    <div className="mt-4 space-y-2">
+                      {msg.assignmentState !== 'dismissed' && (
+                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                          {msg.suggestedMeals.length > 1 && (
+                            <div className="mb-3 flex items-center gap-2">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Pick one</span>
+                              {msg.suggestedMeals.map((_, index) => (
+                                <button
+                                  key={`${msg.id}-pick-${index}`}
+                                  type="button"
+                                  onClick={() => updateSelectedSuggestedMeal(msg.id, index)}
+                                  className={`h-8 min-w-8 rounded-full px-3 text-sm font-bold transition-colors ${
+                                    (msg.selectedSuggestedMealIndex ?? 0) === index
+                                      ? 'bg-emerald-600 text-white'
+                                      : 'border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-100'
+                                  }`}
+                                >
+                                  {index + 1}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-sm font-medium text-emerald-900">
+                            Assign {msg.suggestedMeals[msg.selectedSuggestedMealIndex ?? 0].mealName} to {msg.suggestedMeals[msg.selectedSuggestedMealIndex ?? 0].mealType.toLowerCase()} in Meal Planner?
+                          </p>
+                          {msg.assignmentState === 'assigned' ? (
+                            <p className="mt-2 text-xs font-semibold text-emerald-700">
+                              Added to your meal planner.
+                            </p>
+                          ) : (
+                            <div className="mt-3 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleAssignMeal(msg.id, msg.suggestedMeals![msg.selectedSuggestedMealIndex ?? 0])}
+                                disabled={assigningMealId === msg.suggestedMeals[msg.selectedSuggestedMealIndex ?? 0].id}
+                                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {assigningMealId === msg.suggestedMeals[msg.selectedSuggestedMealIndex ?? 0].id ? 'Assigning...' : 'Yes'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateMessageAssignmentState(msg.id, 'dismissed')}
+                                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                              >
+                                No
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className={`text-[10px] mt-2 opacity-50 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                     {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>

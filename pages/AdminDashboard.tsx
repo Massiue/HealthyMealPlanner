@@ -13,13 +13,6 @@ const EMPTY_MEAL: Partial<Meal> = {
   imageUrl: ''
 };
 
-const isDbMealId = (id: string) => /^\d+$/.test(String(id));
-
-type MockMealMetaRow = {
-  mockId: string;
-  deleted: number;
-  convertedMealId?: number | null;
-};
 const AdminDashboard: React.FC = () => {
   const getToken = () => localStorage.getItem('nutriplan_token') || '';
   const { user: currentUser, meals, addGlobalMeal, removeGlobalMeal } = useContext(AuthContext);
@@ -32,7 +25,6 @@ const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'stats' | 'users' | 'meals'>('stats');
   const [notification, setNotification] = useState<string | null>(null);
   const [newMeal, setNewMeal] = useState<Partial<Meal>>(EMPTY_MEAL);
-  const [convertedMealIds, setConvertedMealIds] = useState<string[]>([]);
   
 
   const stats = {
@@ -65,25 +57,8 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  const fetchMockMealMeta = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/mock-meals/meta`);
-      if (!response.ok) return;
-      const rows: MockMealMetaRow[] = await response.json();
-      const convertedIds = Array.isArray(rows)
-        ? rows
-            .filter((row) => row?.convertedMealId !== null && row?.convertedMealId !== undefined)
-            .map((row) => String(row.convertedMealId))
-        : [];
-      setConvertedMealIds(convertedIds);
-    } catch {
-      // Keep current badge state if request fails.
-    }
-  };
-
   useEffect(() => {
     fetchUsers();
-    fetchMockMealMeta();
   }, [activeTab]);
 
   const handleEditMeal = (meal: Meal) => {
@@ -110,47 +85,6 @@ const AdminDashboard: React.FC = () => {
   const handleSaveMeal = async () => {
     if (!editMealId) return;
     const mealPayload = buildMealPayload();
-    const dbMeal = isDbMealId(editMealId);
-
-    if (!dbMeal) {
-      try {
-        const response = await fetch(`${API_BASE}/admin/meals`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`
-          },
-          body: JSON.stringify(mealPayload)
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success || !data.mealId) {
-          showNotification(data?.error || 'Failed to store meal in database.');
-          return;
-        }
-
-        // Replace mock meal with a persisted DB meal so future edits use backend PUT.
-        await fetch(`${API_BASE}/admin/mock-meals/convert`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`
-          },
-          body: JSON.stringify({
-            mockId: editMealId,
-            convertedMealId: Number(data.mealId)
-          })
-        });
-        removeGlobalMeal(editMealId);
-        const persistedMealId = String(data.mealId);
-        setConvertedMealIds((prev) => (prev.includes(persistedMealId) ? prev : [persistedMealId, ...prev]));
-        addGlobalMeal({ ...mealPayload, id: persistedMealId });
-        showNotification('Meal updated and stored in database.');
-        handleCancelEdit();
-      } catch {
-        showNotification('Error storing updated meal in database.');
-      }
-      return;
-    }
 
     try {
       const response = await fetch(`${API_BASE}/admin/meals/${editMealId}`, {
@@ -243,7 +177,7 @@ const AdminDashboard: React.FC = () => {
         showNotification(data?.error || 'Failed to store meal in database.');
         return;
       }
-      addGlobalMeal({ ...mealPayload, id: String(data.mealId) });
+      addGlobalMeal({ ...mealPayload, id: String(data.mealId), createdAt: data?.createdAt || new Date().toISOString() });
       setNewMeal(EMPTY_MEAL);
       showNotification(`"${mealPayload.mealName}" published to library and stored in database.`);
     } catch {
@@ -252,30 +186,6 @@ const AdminDashboard: React.FC = () => {
   };
 
   const handleDeleteMeal = async (meal: Meal) => {
-    if (!isDbMealId(meal.id)) {
-      try {
-        const response = await fetch(`${API_BASE}/admin/mock-meals/delete`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`
-          },
-          body: JSON.stringify({ mockId: meal.id })
-        });
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-          showNotification(data?.error || 'Failed to delete meal.');
-          return;
-        }
-        removeGlobalMeal(meal.id);
-        showNotification('Meal removed from database view.');
-        setDeleteConfirmId(null);
-      } catch {
-        showNotification('Error deleting meal.');
-      }
-      return;
-    }
-
     try {
       const response = await fetch(`${API_BASE}/admin/meals/${meal.id}`, {
         method: 'DELETE',
@@ -440,7 +350,7 @@ const AdminDashboard: React.FC = () => {
         <div className="grid lg:grid-cols-3 gap-8 animate-fadeIn">
           <div className="lg:col-span-1">
             <div className="bg-white p-8 rounded-[2.5rem] border border-emerald-50 sticky top-24 shadow-sm">
-              <h2 className="text-xl font-bold text-slate-900 mb-6">{isEditingMeal ? 'Edit Database Meal' : 'Create Global Meal'}</h2>
+              <h2 className="text-xl font-bold text-slate-900 mb-6">{isEditingMeal ? 'Edit Meal' : 'Create Global Meal'}</h2>
               <form onSubmit={handleAddMeal} className="space-y-4">
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Meal Title</label>
@@ -542,11 +452,6 @@ const AdminDashboard: React.FC = () => {
                           <img src={m.imageUrl || DEFAULT_MEAL_IMAGE} className="w-12 h-12 rounded-xl object-cover" alt="" />
                           <div>
                             <div className="font-bold text-slate-900">{m.mealName}</div>
-                            {convertedMealIds.includes(String(m.id)) && (
-                              <div className="inline-flex items-center mt-1 px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-amber-100 text-amber-700 border border-amber-200">
-                                Converted from default meal
-                              </div>
-                            )}
                             <div className="text-[10px] text-emerald-600 font-bold uppercase">{m.dietTag} • {m.mealType}</div>
                           </div>
                         </div>
@@ -559,7 +464,7 @@ const AdminDashboard: React.FC = () => {
                           type="button"
                           onClick={() => handleEditMeal(m)}
                           className="transition-all p-2 ml-2 text-blue-400 hover:text-blue-600"
-                          title={isDbMealId(m.id) ? 'Edit database meal' : 'Edit meal'}
+                          title="Edit meal"
                         >
                           <i className="fa-solid fa-pen-to-square"></i>
                         </button>
@@ -567,7 +472,7 @@ const AdminDashboard: React.FC = () => {
                           type="button"
                           onClick={() => setDeleteConfirmId(m.id)}
                           className="transition-all p-2 text-red-400 hover:text-red-600"
-                          title={isDbMealId(m.id) ? 'Delete database meal' : 'Delete meal'}
+                          title="Delete meal"
                         >
                           <i className="fa-solid fa-trash-can"></i>
                         </button>
@@ -594,7 +499,3 @@ const AdminDashboard: React.FC = () => {
 };
 
 export default AdminDashboard;
-
-
-
-

@@ -12,7 +12,6 @@ import ProfilePage from './pages/ProfilePage';
 import AdminDashboard from './pages/AdminDashboard';
 import ProgressPage from './pages/ProgressPage';
 import NutritionChatbotPage from './pages/NutritionChatbotPage';
-import { MOCK_MEALS } from './constants';
 
 export const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
@@ -30,23 +29,8 @@ const normalizeMeal = (raw: any): Meal => ({
   protein: Number(raw?.protein ?? 0),
   imageUrl: String(raw?.imageUrl ?? ''),
   dietTag: String(raw?.dietTag ?? 'Vegetarian'),
+  createdAt: raw?.createdAt ? String(raw.createdAt) : undefined,
 });
-
-type MockMealMeta = {
-  mockId: string;
-  deleted: number;
-  convertedMealId?: number | null;
-};
-
-const applyMockMealMeta = (mockMeals: Meal[], metaRows: MockMealMeta[]): Meal[] => {
-  const excludedMockIds = new Set(
-    (metaRows || [])
-      .filter((row) => Number(row?.deleted) === 1 || row?.convertedMealId)
-      .map((row) => String(row.mockId))
-  );
-
-  return mockMeals.filter((meal) => !excludedMockIds.has(meal.id));
-};
 
 const normalizeUser = (raw: any): User => ({
   id: String(raw?.id ?? ''),
@@ -75,35 +59,17 @@ const App: React.FC = () => {
   const [token, setToken] = useState<string | null>(localStorage.getItem('nutriplan_token'));
   const [isLoading, setIsLoading] = useState(true);
   const [plans, setPlans] = useState<Record<string, Record<string, DailyPlan>>>({});
-  const [meals, setMeals] = useState<Meal[]>(MOCK_MEALS);
+  const [meals, setMeals] = useState<Meal[]>([]);
 
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const loadMealsFromApi = useCallback(async () => {
     try {
-      const [mealsResponse, metaResponse] = await Promise.all([
-        fetch(`${API_BASE}/meals`),
-        fetch(`${API_BASE}/mock-meals/meta`),
-      ]);
-
+      const mealsResponse = await fetch(`${API_BASE}/meals`);
       const mealsPayload = mealsResponse.ok ? await mealsResponse.json() : [];
-      const metaPayload = metaResponse.ok ? await metaResponse.json() : [];
-
-      const dbMeals = Array.isArray(mealsPayload) ? mealsPayload.map(normalizeMeal) : [];
-      const filteredMockMeals = applyMockMealMeta(
-        MOCK_MEALS,
-        Array.isArray(metaPayload) ? (metaPayload as MockMealMeta[]) : []
-      );
-
-      const merged = [...dbMeals, ...filteredMockMeals].reduce((acc, meal) => {
-        if (!meal?.id || acc.some((m) => m.id === meal.id)) return acc;
-        acc.push(meal);
-        return acc;
-      }, [] as Meal[]);
-
-      setMeals(merged);
+      setMeals(Array.isArray(mealsPayload) ? mealsPayload.map(normalizeMeal) : []);
     } catch {
-      setMeals(MOCK_MEALS);
+      setMeals([]);
     }
   }, []);
 
@@ -319,7 +285,7 @@ const App: React.FC = () => {
           <Route path="/planner" element={user ? <Layout onLogout={logout}><MealPlanPage currentPlan={(plans[user?.id || 'public'] && plans[user?.id || 'public'][selectedDate]) || {date:selectedDate,waterIntake:0}} onRemoveMeal={removeMealFromPlan} /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/progress" element={user ? <Layout onLogout={logout}><ProgressPage /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/profile" element={user ? <Layout onLogout={logout}><ProfilePage /></Layout> : <Navigate to="/login" replace />} />
-          <Route path="/chatbot" element={user ? <Layout onLogout={logout}><NutritionChatbotPage /></Layout> : <Navigate to="/login" replace />} />
+          <Route path="/chatbot" element={user ? <Layout onLogout={logout}><NutritionChatbotPage onAssignMeal={addMealToPlan} /></Layout> : <Navigate to="/login" replace />} />
           <Route path="/admin" element={user?.role === 'admin' ? <Layout onLogout={logout}><AdminDashboard /></Layout> : <Navigate to="/dashboard" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

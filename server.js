@@ -6,13 +6,17 @@ import jwt from "jsonwebtoken";
 import cors from "cors";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import { GoogleGenAI } from "@google/genai";
 
+dotenv.config({ path: ".env.local" });
 dotenv.config();
 const sqlite = sqlite3.verbose();
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "nutri-plan-secret-key-2024";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
+const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 app.use(cors());
 app.use(express.json());
@@ -117,6 +121,7 @@ db.serialize(() => {
   ensureColumn("users", "dailyProtein", "INTEGER");
   ensureColumn("users", "dailyWater", "REAL");
   ensureColumn("users", "weightHistory", "TEXT");
+  ensureColumn("meals", "createdAt", "TEXT DEFAULT CURRENT_TIMESTAMP");
   ensureColumn("plans", "breakfast_data", "TEXT");
   ensureColumn("plans", "lunch_data", "TEXT");
   ensureColumn("plans", "dinner_data", "TEXT");
@@ -492,6 +497,80 @@ const isMealOrFoodQuestion = (message) => {
   );
 };
 
+const toChatbotMeal = (meal) => ({
+  id: String(meal?.id ?? ""),
+  mealName: String(meal?.mealName ?? ""),
+  mealType: String(meal?.mealType ?? ""),
+  calories: Number(meal?.calories ?? 0),
+  protein: Number(meal?.protein ?? 0),
+  imageUrl: String(meal?.imageUrl ?? ""),
+  dietTag: String(meal?.dietTag ?? "Vegetarian"),
+});
+
+const generateGeneralChatReply = async (message, user = {}, availableMeals = []) => {
+  if (!geminiClient) {
+    return {
+      intent: "general",
+      reply:
+        "I can answer general questions once `GEMINI_API_KEY` is configured on the server. Right now I can still help with meals, calories, protein, hydration, BMI, and daily meal planning.",
+    };
+  }
+
+  const profileSummary = [
+    user?.goal ? `Goal: ${user.goal}` : null,
+    user?.age ? `Age: ${user.age}` : null,
+    user?.gender ? `Gender: ${user.gender}` : null,
+    user?.height ? `Height: ${user.height} cm` : null,
+    user?.weight ? `Weight: ${user.weight} kg` : null,
+    user?.activityLevel ? `Activity level: ${user.activityLevel}` : null,
+    user?.dailyCalories ? `Daily calorie target: ${user.dailyCalories} kcal` : null,
+    user?.dailyProtein ? `Daily protein target: ${user.dailyProtein} g` : null,
+    user?.dailyWater ? `Daily water target: ${user.dailyWater} L` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const sampleMeals = (Array.isArray(availableMeals) ? availableMeals : [])
+    .slice(0, 12)
+    .map((meal) => {
+      const calories = Number(meal?.calories || 0);
+      const protein = Number(meal?.protein || 0);
+      return `- ${meal?.mealName || "Meal"} (${meal?.mealType || "meal"}, ${calories} kcal, ${protein}g protein, ${meal?.dietTag || "Any"})`;
+    })
+    .join("\n");
+
+  const prompt = `
+You are NutriPlan's in-app chatbot.
+Answer the user's question directly and clearly.
+If the question is about food, nutrition, calories, protein, hydration, meal planning, or healthy habits, personalize the answer using the profile and meal catalog below.
+If the question is outside nutrition, still answer helpfully in a concise way.
+Do not claim you performed actions you did not perform.
+Avoid diagnosis or emergency medical advice; for urgent or medical-risk questions, say to consult a licensed professional.
+Prefer short paragraphs or short bullet points.
+
+User profile:
+${profileSummary || "No saved profile data."}
+
+Available meals in app:
+${sampleMeals || "No meal catalog available."}
+
+User question:
+${message}
+`;
+
+  const response = await geminiClient.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+  });
+
+  return {
+    intent: "general",
+    reply:
+      String(response?.text || "").trim() ||
+      "I couldn't generate a response right now. Please try again.",
+  };
+};
+
 const buildNutritionReply = (message, user, availableMeals = []) => {
   const intent = parseIntent(message);
   const messageWeight = extractWeightFromMessage(message);
@@ -650,6 +729,7 @@ const buildNutritionReply = (message, user, availableMeals = []) => {
       return {
         intent,
         reply: `For today's ${slotLabel}, try: ${options} ${calorieLine}`,
+        suggestedMeals: picks.map(toChatbotMeal),
       };
     }
 
@@ -706,6 +786,7 @@ const buildNutritionReply = (message, user, availableMeals = []) => {
       }; Dinner - ${dinner?.mealName || fbDinner}. This is personalized to your ${
         user?.goal || "health"
       } goal${availableMeals.length ? ` using ${availableMeals.length} meals from recommendations` : ""}.`,
+      suggestedMeals: [breakfast, lunch, dinner].filter(Boolean).map(toChatbotMeal),
     };
   }
 
@@ -892,13 +973,6 @@ app.get("/api/me", authenticate, (req, res) => {
 app.post("/api/chatbot/nutrition", authenticate, (req, res) => {
   const message = String(req.body?.message || "").trim();
   if (!message) return res.status(400).json({ error: "Message is required" });
-  if (!isMealOrFoodQuestion(message)) {
-    return res.json({
-      success: true,
-      intent: "blocked",
-      reply: "I only answer meal and food related questions.",
-    });
-  }
 
   db.get(
     `SELECT age, gender, height, weight, activityLevel, goal, dailyCalories, dailyProtein, dailyWater
@@ -908,16 +982,29 @@ app.post("/api/chatbot/nutrition", authenticate, (req, res) => {
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
       db.all(
-        `SELECT id, mealName, mealType, calories, protein, dietTag
+        `SELECT id, mealName, mealType, calories, protein, dietTag, imageUrl
          FROM meals`,
-        (mealErr, mealRows) => {
+        async (mealErr, mealRows) => {
           if (mealErr) return res.status(500).json({ error: mealErr.message });
-          const result = buildNutritionReply(message, row || {}, mealRows || []);
-          res.json({
-            success: true,
-            reply: result.reply,
-            intent: result.intent,
-          });
+          try {
+            const normalizedMessage = message.toLowerCase();
+            const shouldUseLocalNutritionReply = isMealOrFoodQuestion(normalizedMessage);
+            const result = shouldUseLocalNutritionReply
+              ? buildNutritionReply(message, row || {}, mealRows || [])
+              : await generateGeneralChatReply(message, row || {}, mealRows || []);
+
+            res.json({
+              success: true,
+              reply: result.reply,
+              intent: result.intent,
+              suggestedMeals: Array.isArray(result.suggestedMeals) ? result.suggestedMeals : [],
+            });
+          } catch (chatErr) {
+            console.error("CHATBOT ERROR:", chatErr);
+            res.status(500).json({
+              error: "Unable to generate a chatbot response right now.",
+            });
+          }
         }
       );
     }
@@ -978,10 +1065,27 @@ app.put("/api/profile", authenticate, (req, res) => {
 
 app.get("/api/meals", (req, res) => {
   db.all(
-    `SELECT id, mealName, mealType, calories, protein, dietTag, imageUrl
+    `SELECT id, mealName, mealType, calories, protein, dietTag, imageUrl, createdAt
      FROM meals
      ORDER BY id DESC`,
     (err, rows) => {
+      if (err && /no such column:\s*createdAt/i.test(err.message || "")) {
+        db.all(
+          `SELECT id, mealName, mealType, calories, protein, dietTag, imageUrl
+           FROM meals
+           ORDER BY id DESC`,
+          (fallbackErr, fallbackRows) => {
+            if (fallbackErr) return res.status(500).json({ error: fallbackErr.message });
+            res.json(
+              (fallbackRows || []).map((meal) => ({
+                ...meal,
+                createdAt: null,
+              }))
+            );
+          }
+        );
+        return;
+      }
       if (err) return res.status(500).json({ error: err.message });
       res.json(rows);
     }
@@ -1067,7 +1171,7 @@ app.post("/api/admin/meals", authenticate, adminOnly, (req, res) => {
     [mealName, mealType, calories, protein, dietTag, imageUrl],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true, mealId: this.lastID });
+      res.json({ success: true, mealId: this.lastID, createdAt: new Date().toISOString() });
     }
   );
 });

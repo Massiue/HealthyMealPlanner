@@ -10,6 +10,7 @@ interface MealRecommendationsProps {
 }
 
 type DietFilter = 'All' | 'Veg' | 'Non-Veg' | 'High Protein';
+const NEW_ADDITION_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
 
 const MealRecommendations: React.FC<MealRecommendationsProps> = ({ onAddMeal, currentPlan }) => {
   const { meals } = useContext(AuthContext);
@@ -46,6 +47,13 @@ const MealRecommendations: React.FC<MealRecommendationsProps> = ({ onAddMeal, cu
     setSearchQuery('');
     setDietFilter('All');
     setActiveFilter('All');
+  };
+
+  const isNewAddition = (meal: Meal) => {
+    if (!meal.createdAt) return false;
+    const createdAtMs = new Date(meal.createdAt).getTime();
+    if (Number.isNaN(createdAtMs)) return false;
+    return Date.now() - createdAtMs <= NEW_ADDITION_WINDOW_MS;
   };
 
   return (
@@ -104,11 +112,11 @@ const MealRecommendations: React.FC<MealRecommendationsProps> = ({ onAddMeal, cu
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8 w-full">
         {filteredMeals.map((meal) => {
           const added = isMealInPlan(meal);
-          const isCustom = !meal.id.startsWith('b') && !meal.id.startsWith('l') && !meal.id.startsWith('d');
+          const showNewBadge = isNewAddition(meal);
           
           return (
             <div key={meal.id} className="bg-white rounded-[2.5rem] overflow-hidden border border-emerald-50 group transition-all duration-300 flex flex-col shadow-sm hover:shadow-md relative">
-              {isCustom && (
+              {showNewBadge && (
                 <div className="absolute top-4 left-4 z-10 bg-blue-600 text-white text-[8px] font-black uppercase px-2 py-1 rounded-md shadow-sm">
                   New Addition
                 </div>
