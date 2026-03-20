@@ -7,9 +7,16 @@ import cors from "cors";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config({ path: ".env.local" });
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, "..");
+const databasePath = path.join(__dirname, "nutriplan.db");
+
+dotenv.config({ path: path.join(projectRoot, ".env.local") });
+dotenv.config({ path: path.join(projectRoot, ".env") });
 const sqlite = sqlite3.verbose();
 const app = express();
 
@@ -22,7 +29,7 @@ app.use(cors());
 app.use(express.json());
 
 // -------------------- DB --------------------
-const db = new sqlite.Database("./nutriplan.db", (err) => {
+const db = new sqlite.Database(databasePath, (err) => {
   if (err) console.error("Database error:", err.message);
   else console.log("Connected to NutriPlan Database");
 });
@@ -157,7 +164,7 @@ const EMAIL_PASS = process.env.EMAIL_PASS;
 // Hard stop if missing env (prevents silent failures)
 if (!EMAIL_USER || !EMAIL_PASS) {
   console.error("EMAIL_USER or EMAIL_PASS missing in .env");
-  console.error("Create .env in the same folder as server.js and restart.");
+  console.error("Create .env in the project root and restart.");
 }
 
 // Gmail SMTP
@@ -916,43 +923,48 @@ app.post("/api/login", (req, res) => {
     return res.status(400).json({ error: "Email and password required" });
 
   db.get(`SELECT * FROM users WHERE email = ?`, [email], async (err, user) => {
-    if (err) return res.status(500).json({ error: err.message });
+    try {
+      if (err) return res.status(500).json({ error: err.message });
 
-    if (!user) return res.status(401).json({ error: "Invalid email or password" });
+      if (!user) return res.status(401).json({ error: "Invalid email or password" });
 
-    const match = await bcrypt.compare(password, user.password);
+      const match = await bcrypt.compare(password, user.password);
 
-    if (!match) {
-      // Respond immediately; email notifications must not block auth.
-      res.status(401).json({ error: "Invalid email or password" });
+      if (!match) {
+        // Respond immediately; email notifications must not block auth.
+        res.status(401).json({ error: "Invalid email or password" });
+        setImmediate(async () => {
+          try {
+            const info = await sendSecurityAlert(email, user.name);
+            console.log("SECURITY ALERT EMAIL SENT", info.response, "to", email);
+          } catch (mailErr) {
+            logMailError("SECURITY MAIL ERROR", mailErr);
+          }
+        });
+        return;
+      }
+
+      const token = jwt.sign(
+        { id: user.id, email: user.email, role: user.role || "user" },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.json({ success: true, token });
+
+      // Send login alert in background after response is sent.
       setImmediate(async () => {
         try {
-          const info = await sendSecurityAlert(email, user.name);
-          console.log("SECURITY ALERT EMAIL SENT", info.response, "to", email);
+          const info = await sendLoginAlert(email, user.name);
+          console.log("LOGIN ALERT EMAIL SENT", info.response, "to", email);
         } catch (mailErr) {
-          logMailError("SECURITY MAIL ERROR", mailErr);
+          logMailError("LOGIN MAIL ERROR", mailErr);
         }
       });
-      return;
+    } catch (loginErr) {
+      console.error("LOGIN ERROR:", loginErr);
+      res.status(500).json({ error: "Unable to process login right now." });
     }
-
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({ success: true, token });
-
-    // Send login alert in background after response is sent.
-    setImmediate(async () => {
-      try {
-        const info = await sendLoginAlert(email, user.name);
-        console.log("LOGIN ALERT EMAIL SENT", info.response, "to", email);
-      } catch (mailErr) {
-        logMailError("LOGIN MAIL ERROR", mailErr);
-      }
-    });
   });
 });
 
@@ -1294,3 +1306,7 @@ app.get("/", (req, res) => res.send("Healthy Meal Planner Backend Running"));
 app.listen(PORT, () => {
   console.log(`Backend Server: http://localhost:${PORT}`);
 });
+
+
+
+

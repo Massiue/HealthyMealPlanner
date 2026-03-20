@@ -54,6 +54,19 @@ const authHeaders = (authToken?: string): HeadersInit => ({
   ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
 });
 
+const readJsonSafely = async (response: Response) => {
+  const raw = await response.text();
+
+  if (!raw.trim()) {
+    return { raw: '', data: null };
+  }
+
+  try {
+    return { raw, data: JSON.parse(raw) };
+  } catch {
+    return { raw, data: null };
+  }
+};
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('nutriplan_token'));
@@ -130,9 +143,10 @@ const App: React.FC = () => {
       body: JSON.stringify({ email, password: pass }),
     });
 
-    const payload = await response.json();
+    const { data: payload, raw } = await readJsonSafely(response);
     if (!response.ok || !payload?.token) {
-      throw new Error(payload?.error || 'Invalid email or password.');
+      const details = raw?.trim() ? ` Server response: ${raw.trim().slice(0, 160)}` : '';
+      throw new Error(payload?.error || `Login failed (${response.status}).${details}`);
     }
 
     const authToken = payload.token;
@@ -152,7 +166,7 @@ const App: React.FC = () => {
       }),
     });
 
-    const payload = await response.json();
+    const { data: payload } = await readJsonSafely(response);
     if (!response.ok) {
       throw new Error(payload?.error || 'Registration failed.');
     }
@@ -174,7 +188,7 @@ const App: React.FC = () => {
       headers: authHeaders(token),
       body: JSON.stringify(data),
     });
-    const payload = await response.json();
+    const { data: payload } = await readJsonSafely(response);
     if (!response.ok) {
       throw new Error(payload?.error || 'Failed to update profile.');
     }
@@ -295,3 +309,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
