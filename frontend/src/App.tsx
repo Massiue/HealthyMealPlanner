@@ -15,7 +15,7 @@ import NutritionChatbotPage from './pages/NutritionChatbotPage';
 
 export const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const MEAL_TYPES = new Set(Object.values(MealType));
 
 const normalizeMealType = (value: any): MealType =>
@@ -309,4 +309,5 @@ const App: React.FC = () => {
 };
 
 export default App;
+
 
