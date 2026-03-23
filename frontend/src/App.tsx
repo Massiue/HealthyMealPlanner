@@ -233,8 +233,13 @@ const App: React.FC = () => {
     const date = selectedDate;
     const userKey = user.id;
     const userPlans = plans[userKey] || {};
-    const plan = userPlans[date] || { date, waterIntake: 0 };
-    const updatedPlan = { ...plan, [meal.mealType.toLowerCase()]: meal };
+    const plan: DailyPlan = userPlans[date] || { date, waterIntake: 0 };
+    const updatedPlan: DailyPlan = { ...plan };
+
+    if (meal.mealType === MealType.BREAKFAST) updatedPlan.breakfast = meal;
+    if (meal.mealType === MealType.LUNCH) updatedPlan.lunch = meal;
+    if (meal.mealType === MealType.DINNER) updatedPlan.dinner = meal;
+
     setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: updatedPlan } }));
     await savePlan(date, updatedPlan);
   };
@@ -244,19 +249,23 @@ const App: React.FC = () => {
     const date = selectedDate;
     const userKey = user.id;
     const userPlans = plans[userKey] || {};
-    const plan = { ...(userPlans[date] || {}) };
-    (plan as DailyPlan).date = date;
-    delete (plan as any)[type.toLowerCase()];
-    setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: plan } }));
-    await savePlan(date, plan as DailyPlan);
+    const plan: DailyPlan = { ...(userPlans[date] || { date, waterIntake: 0 }), date };
+    const updatedPlan: DailyPlan = { ...plan };
+
+    if (type === MealType.BREAKFAST) updatedPlan.breakfast = undefined;
+    if (type === MealType.LUNCH) updatedPlan.lunch = undefined;
+    if (type === MealType.DINNER) updatedPlan.dinner = undefined;
+
+    setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: updatedPlan } }));
+    await savePlan(date, updatedPlan);
   };
 
   const updateWaterIntake = async (amount: number, date: string = selectedDate) => {
     if (!user) return;
     const userKey = user.id;
     const userPlans = plans[userKey] || {};
-    const plan = userPlans[date] || { date, waterIntake: 0 };
-    const updatedPlan = { ...plan, waterIntake: Math.max(0, amount) };
+    const plan: DailyPlan = userPlans[date] || { date, waterIntake: 0 };
+    const updatedPlan: DailyPlan = { ...plan, waterIntake: Math.max(0, amount) };
     setPlans(prev => ({ ...prev, [userKey]: { ...(prev[userKey] || {}), [date]: updatedPlan } }));
     await savePlan(date, updatedPlan);
   };
@@ -309,5 +318,6 @@ const App: React.FC = () => {
 };
 
 export default App;
+
 
 
