@@ -4,6 +4,7 @@ import { Send, Bot, User as UserIcon, Loader2, Trash2, History, MoreVertical } f
 import { motion, AnimatePresence } from 'motion/react';
 import { Meal, MealType } from '../types';
 import { AuthContext } from '../App';
+import { API_BASE } from '../apiConfig';
 
 interface Message {
   id: string;
@@ -36,7 +37,6 @@ interface NutritionChatbotPageProps {
   onAssignMeal: (meal: Meal) => Promise<void>;
 }
 
-const API_BASE = '/api';
 const HISTORY_LIMIT = 10;
 
 const normalizeSuggestedMeal = (raw: any): Meal | null => {

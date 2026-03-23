@@ -2,8 +2,7 @@ import React, { useState, useContext, useEffect } from 'react';
 import { User, Meal, MealType, FitnessGoal } from '../types';
 import { AuthContext } from '../App';
 import { DEFAULT_MEAL_IMAGE } from '../constants';
-
-const API_BASE = '/api';
+import { API_BASE } from '../apiConfig';
 const EMPTY_MEAL: Partial<Meal> = {
   mealName: '',
   mealType: MealType.LUNCH,

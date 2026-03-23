@@ -12,10 +12,9 @@ import ProfilePage from './pages/ProfilePage';
 import AdminDashboard from './pages/AdminDashboard';
 import ProgressPage from './pages/ProgressPage';
 import NutritionChatbotPage from './pages/NutritionChatbotPage';
+import { API_BASE } from './apiConfig';
 
 export const AuthContext = createContext<AuthContextType>({} as AuthContextType);
-
-const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 const MEAL_TYPES = new Set(Object.values(MealType));
 
 const normalizeMealType = (value: any): MealType =>
