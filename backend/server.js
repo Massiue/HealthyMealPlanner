@@ -7,6 +7,7 @@ import cors from "cors";
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -14,6 +15,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const databasePath = path.join(__dirname, "nutriplan.db");
+const clientDistPath = path.join(projectRoot, "dist");
+const clientIndexPath = path.join(clientDistPath, "index.html");
 
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 dotenv.config({ path: path.join(projectRoot, ".env") });
@@ -70,17 +73,33 @@ const sanitizeUser = (row) => {
 };
 
 db.serialize(() => {
-  const ensureColumn = (table, column, definition) => {
+  const ensureColumn = (table, column, definition, options = {}) => {
     db.all(`PRAGMA table_info(${table})`, (pragmaErr, columns) => {
       if (pragmaErr) return console.error(`Schema lookup failed for ${table}:`, pragmaErr.message);
       const exists = columns.some((col) => col.name === column);
       if (exists) return;
       db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, (alterErr) => {
-        if (alterErr) console.error(`Failed adding ${table}.${column}:`, alterErr.message);
+        if (!alterErr) {
+          if (typeof options.afterAdd === "function") options.afterAdd();
+          return;
+        }
+
+        if (/Cannot add a column with non-constant default/i.test(alterErr.message || "")) {
+          const fallbackDefinition = options.fallbackDefinition || definition.replace(/\s+DEFAULT\s+CURRENT_TIMESTAMP/i, "");
+          db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${fallbackDefinition}`, (fallbackErr) => {
+            if (fallbackErr) {
+              console.error(`Failed adding ${table}.${column}:`, fallbackErr.message);
+              return;
+            }
+            if (typeof options.afterAdd === "function") options.afterAdd();
+          });
+          return;
+        }
+
+        console.error(`Failed adding ${table}.${column}:`, alterErr.message);
       });
     });
   };
-
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
@@ -128,7 +147,12 @@ db.serialize(() => {
   ensureColumn("users", "dailyProtein", "INTEGER");
   ensureColumn("users", "dailyWater", "REAL");
   ensureColumn("users", "weightHistory", "TEXT");
-  ensureColumn("meals", "createdAt", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  ensureColumn("meals", "createdAt", "TEXT DEFAULT CURRENT_TIMESTAMP", {
+    fallbackDefinition: "TEXT",
+    afterAdd: () => {
+      db.run(`UPDATE meals SET createdAt = COALESCE(createdAt, CURRENT_TIMESTAMP) WHERE createdAt IS NULL`);
+    },
+  });
   ensureColumn("plans", "breakfast_data", "TEXT");
   ensureColumn("plans", "lunch_data", "TEXT");
   ensureColumn("plans", "dinner_data", "TEXT");
@@ -1179,7 +1203,7 @@ app.put("/api/plans/:date", authenticate, (req, res) => {
 app.post("/api/admin/meals", authenticate, adminOnly, (req, res) => {
   const { mealName, mealType, calories, protein, dietTag, imageUrl } = req.body;
   db.run(
-    `INSERT INTO meals (mealName, mealType, calories, protein, dietTag, imageUrl) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO meals (mealName, mealType, calories, protein, dietTag, imageUrl, createdAt) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [mealName, mealType, calories, protein, dietTag, imageUrl],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
@@ -1301,12 +1325,23 @@ app.get("/api/admin/stats", authenticate, adminOnly, (req, res) => {
 });
 
 // -------------------- Health Check --------------------
-app.get("/", (req, res) => res.send("Healthy Meal Planner Backend Running"));
+const serveClientApp = (req, res) => {
+  if (fs.existsSync(clientIndexPath)) {
+    return res.sendFile(clientIndexPath);
+  }
+
+  res.send("Healthy Meal Planner Backend Running");
+};
+
+app.use(express.static(clientDistPath));
+app.get("/", serveClientApp);
+app.use((req, res, next) => {
+  if (req.method === "GET" && !req.path.startsWith("/api")) {
+    return serveClientApp(req, res);
+  }
+  next();
+});
 
 app.listen(PORT, () => {
   console.log(`Backend Server: http://localhost:${PORT}`);
 });
-
-
-
-
