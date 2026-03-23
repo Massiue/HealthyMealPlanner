@@ -13,6 +13,20 @@ const EMPTY_MEAL: Partial<Meal> = {
   imageUrl: ''
 };
 
+const readJsonSafely = async (response: Response) => {
+  const raw = await response.text();
+
+  if (!raw.trim()) {
+    return { raw: '', data: null };
+  }
+
+  try {
+    return { raw, data: JSON.parse(raw) };
+  } catch {
+    return { raw, data: null };
+  }
+};
+
 const AdminDashboard: React.FC = () => {
   const getToken = () => localStorage.getItem('nutriplan_token') || '';
   const { user: currentUser, meals, addGlobalMeal, removeGlobalMeal } = useContext(AuthContext);
@@ -95,9 +109,10 @@ const AdminDashboard: React.FC = () => {
         },
         body: JSON.stringify(mealPayload)
       });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        showNotification(data?.error || 'Failed to update meal.');
+      const { data, raw } = await readJsonSafely(response);
+      if (!response.ok || !data?.success) {
+        const details = raw?.trim() ? ` Server response: ${raw.trim().slice(0, 160)}` : '';
+        showNotification(data?.error || `Failed to update meal.${details}`);
         return;
       }
       addGlobalMeal({ ...mealPayload, id: editMealId });
@@ -172,9 +187,10 @@ const AdminDashboard: React.FC = () => {
         },
         body: JSON.stringify(mealPayload)
       });
-      const data = await response.json();
-      if (!response.ok || !data.success || !data.mealId) {
-        showNotification(data?.error || 'Failed to store meal in database.');
+      const { data, raw } = await readJsonSafely(response);
+      if (!response.ok || !data?.success || !data.mealId) {
+        const details = raw?.trim() ? ` Server response: ${raw.trim().slice(0, 160)}` : '';
+        showNotification(data?.error || `Failed to store meal in database.${details}`);
         return;
       }
       addGlobalMeal({ ...mealPayload, id: String(data.mealId), createdAt: data?.createdAt || new Date().toISOString() });
@@ -191,9 +207,10 @@ const AdminDashboard: React.FC = () => {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${getToken()}` }
       });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        showNotification(data?.error || 'Failed to delete meal.');
+      const { data, raw } = await readJsonSafely(response);
+      if (!response.ok || !data?.success) {
+        const details = raw?.trim() ? ` Server response: ${raw.trim().slice(0, 160)}` : '';
+        showNotification(data?.error || `Failed to delete meal.${details}`);
         return;
       }
       removeGlobalMeal(meal.id);
