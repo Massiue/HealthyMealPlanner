@@ -922,15 +922,17 @@ app.post("/api/signup", async (req, res) => {
         async function (err2) {
           if (err2) return res.status(500).json({ error: err2.message });
 
-          // Send confirmation email
-          try {
-            const info = await sendConfirmationMail(email, name || "User");
-            console.log("CONFIRMATION EMAIL SENT", info.response, "to", email);
-          } catch (mailErr) {
-            logMailError("CONFIRM MAIL ERROR", mailErr);
-          }
-
           res.json({ success: true });
+
+          // Email delivery should never block signup completion.
+          setImmediate(async () => {
+            try {
+              const info = await sendConfirmationMail(email, name || "User");
+              console.log("CONFIRMATION EMAIL SENT", info.response, "to", email);
+            } catch (mailErr) {
+              logMailError("CONFIRM MAIL ERROR", mailErr);
+            }
+          });
         }
       );
     });
