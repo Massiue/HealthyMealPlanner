@@ -1239,6 +1239,42 @@ app.delete("/api/admin/meals/:id", authenticate, adminOnly, (req, res) => {
   });
 });
 
+app.post("/api/meals", authenticate, adminOnly, (req, res) => {
+  const { mealName, mealType, calories, protein, dietTag, imageUrl } = req.body;
+  db.run(
+    `INSERT INTO meals (mealName, mealType, calories, protein, dietTag, imageUrl, createdAt) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    [mealName, mealType, calories, protein, dietTag, imageUrl],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, mealId: this.lastID, createdAt: new Date().toISOString() });
+    }
+  );
+});
+
+app.put("/api/meals/:id", authenticate, adminOnly, (req, res) => {
+  const mealId = req.params.id;
+  const { mealName, mealType, calories, protein, dietTag, imageUrl } = req.body;
+  db.run(
+    `UPDATE meals
+     SET mealName = ?, mealType = ?, calories = ?, protein = ?, dietTag = ?, imageUrl = ?
+     WHERE id = ?`,
+    [mealName, mealType, calories, protein, dietTag, imageUrl, mealId],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: "Meal not found" });
+      res.json({ success: true });
+    }
+  );
+});
+
+app.delete("/api/meals/:id", authenticate, adminOnly, (req, res) => {
+  const mealId = req.params.id;
+  db.run(`DELETE FROM meals WHERE id = ?`, [mealId], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: "Meal not found" });
+    res.json({ success: true });
+  });
+});
 app.get("/api/admin/users", authenticate, adminOnly, (req, res) => {
   db.all(
     `SELECT id, name, email, role, goal, dailyCalories FROM users`,

@@ -1,0 +1,4 @@
+[dotenv@17.3.1] injecting env (2) from .env.local -- tip: 🔐 prevent building .env in docker: https://dotenvx.com/prebuild
+[dotenv@17.3.1] injecting env (1) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+Backend Server: http://localhost:5000
+Connected to NutriPlan Database
