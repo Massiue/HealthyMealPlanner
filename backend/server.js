@@ -304,6 +304,42 @@ const ensureColumn = async (table, column, definition, options = {}) => {
   }
 };
 
+const seedMealsFromFileIfEmpty = async () => {
+  const [rows] = await pool.execute("SELECT COUNT(*) AS total FROM meals");
+  const total = Number(rows?.[0]?.total || 0);
+  if (total > 0) {
+    console.log("Meals already present in MySQL: " + total + ". Skipping seed.");
+    return;
+  }
+
+  const seedPath = path.join(__dirname, "seed-meals.json");
+  if (!fs.existsSync(seedPath)) {
+    console.warn("No seed file found at " + seedPath + ". Skipping meal seed.");
+    return;
+  }
+
+  const raw = fs.readFileSync(seedPath, "utf8");
+  const seedMeals = JSON.parse(raw);
+  if (!Array.isArray(seedMeals) || seedMeals.length === 0) {
+    console.warn("seed-meals.json is empty or invalid. Skipping meal seed.");
+    return;
+  }
+
+  const insertSql = "INSERT INTO meals (mealName, mealType, calories, protein, dietTag, imageUrl, createdAt) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)";
+
+  for (const meal of seedMeals) {
+    await pool.execute(insertSql, [
+      meal?.mealName ?? null,
+      meal?.mealType ?? null,
+      meal?.calories ?? null,
+      meal?.protein ?? null,
+      meal?.dietTag ?? null,
+      meal?.imageUrl ?? null,
+    ]);
+  }
+
+  console.log("Seeded " + seedMeals.length + " meals into MySQL.");
+};
 const initializeDatabase = async () => {
   if (MYSQL_SSL_MODE === "REQUIRED" && !mysqlCa) {
     throw new Error("MYSQL SSL is required but CA could not be loaded. Check MYSQL_SSL_CA_PATH.");
@@ -374,6 +410,8 @@ const initializeDatabase = async () => {
   await ensureColumn("plans", "breakfast_data", "LONGTEXT");
   await ensureColumn("plans", "lunch_data", "LONGTEXT");
   await ensureColumn("plans", "dinner_data", "LONGTEXT");
+
+  await seedMealsFromFileIfEmpty();
 
   const adminEmail = process.env.ADMIN_EMAIL || "madhang285@gmail.com";
   const adminPass = process.env.ADMIN_PASS || "123";
