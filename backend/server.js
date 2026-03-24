@@ -25,12 +25,57 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "nutri-plan-secret-key-2024";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
 const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
-const MYSQL_HOST = process.env.MYSQL_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
-const MYSQL_PORT = Number(process.env.MYSQL_PORT || 17627);
-const MYSQL_USER = process.env.MYSQL_USER || "avnadmin";
-const MYSQL_PASSWORD = process.env.MYSQL_PASSWORD || "";
-const MYSQL_DATABASE = process.env.MYSQL_DATABASE || "defaultdb";
+const MYSQL_URI = process.env.MYSQL_URI || "";
 const MYSQL_SSL_MODE = String(process.env.MYSQL_SSL_MODE || "REQUIRED").toUpperCase();
+
+const parseMysqlConfig = () => {
+  let host = process.env.MYSQL_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
+  let port = Number(process.env.MYSQL_PORT || 17627);
+  let user = process.env.MYSQL_USER || "avnadmin";
+  let password = process.env.MYSQL_PASSWORD || "";
+  let database = process.env.MYSQL_DATABASE || "defaultdb";
+  let source = "MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_DATABASE";
+
+  if (MYSQL_URI) {
+    let parsed;
+    try {
+      parsed = new URL(MYSQL_URI);
+    } catch {
+      throw new Error("MYSQL_URI is invalid. Expected format: mysql://user:pass@host:port/database");
+    }
+
+    if (parsed.protocol !== "mysql:") {
+      throw new Error(`MYSQL_URI protocol must be mysql:, received ${parsed.protocol}`);
+    }
+
+    host = parsed.hostname || host;
+    port = parsed.port ? Number(parsed.port) : port;
+    user = parsed.username ? decodeURIComponent(parsed.username) : user;
+    password = parsed.password ? decodeURIComponent(parsed.password) : password;
+    const dbFromUri = parsed.pathname ? parsed.pathname.replace(/^\//, "") : "";
+    database = dbFromUri || database;
+    source = "MYSQL_URI";
+
+    if (process.env.MYSQL_HOST && process.env.MYSQL_HOST !== host) {
+      console.warn("MYSQL_HOST differs from MYSQL_URI host. Using MYSQL_URI values.");
+    }
+  }
+
+  if (!host) throw new Error("MYSQL host is missing. Set MYSQL_HOST or MYSQL_URI.");
+  if (host.includes(":") && !host.startsWith("[")) {
+    throw new Error("MYSQL_HOST must not contain a port. Put port in MYSQL_PORT.");
+  }
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`MYSQL_PORT is invalid: ${port}`);
+  }
+  if (!user) throw new Error("MYSQL user is missing. Set MYSQL_USER or MYSQL_URI.");
+  if (!password) throw new Error("MYSQL password is missing. Set MYSQL_PASSWORD or MYSQL_URI.");
+  if (!database) throw new Error("MYSQL database is missing. Set MYSQL_DATABASE or MYSQL_URI.");
+
+  return { host, port, user, password, database, source };
+};
+
+const DB_CONFIG = parseMysqlConfig();
 const MYSQL_SSL_CA_PATH = process.env.MYSQL_SSL_CA_PATH || "./backend/aiven-ca.pem";
 const MYSQL_SSL_CA = process.env.MYSQL_SSL_CA || "";
 const MYSQL_SSL_REJECT_UNAUTHORIZED =
@@ -99,11 +144,11 @@ if (MYSQL_SSL_MODE === "REQUIRED") {
 }
 
 const pool = mysql.createPool({
-  host: MYSQL_HOST,
-  port: MYSQL_PORT,
-  user: MYSQL_USER,
-  password: MYSQL_PASSWORD,
-  database: MYSQL_DATABASE,
+  host: DB_CONFIG.host,
+  port: DB_CONFIG.port,
+  user: DB_CONFIG.user,
+  password: DB_CONFIG.password,
+  database: DB_CONFIG.database,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -217,7 +262,7 @@ const ensureColumn = async (table, column, definition, options = {}) => {
     `SELECT COLUMN_NAME
      FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-    [MYSQL_DATABASE, table, column]
+    [DB_CONFIG.database, table, column]
   );
 
   if (Array.isArray(columns) && columns.length > 0) return;
@@ -238,18 +283,14 @@ const ensureColumn = async (table, column, definition, options = {}) => {
 };
 
 const initializeDatabase = async () => {
-  if (!MYSQL_PASSWORD) {
-    throw new Error("MYSQL_PASSWORD is missing. Set it in .env before starting backend.");
-  }
-
   if (MYSQL_SSL_MODE === "REQUIRED" && !mysqlCa) {
     throw new Error("MYSQL SSL is required but CA could not be loaded. Check MYSQL_SSL_CA_PATH.");
   }
 
-  console.log(`MySQL target => host=${MYSQL_HOST} port=${MYSQL_PORT} db=${MYSQL_DATABASE} user=${MYSQL_USER} sslMode=${MYSQL_SSL_MODE}`);
+  console.log(`MySQL target => host=${DB_CONFIG.host} port=${DB_CONFIG.port} db=${DB_CONFIG.database} user=${DB_CONFIG.user} sslMode=${MYSQL_SSL_MODE} source=${DB_CONFIG.source}`);
   const connection = await pool.getConnection();
   connection.release();
-  console.log(`Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}`);
+  console.log(`Connected to MySQL at ${DB_CONFIG.host}:${DB_CONFIG.port}/${DB_CONFIG.database}`);
 
   await pool.execute(`CREATE TABLE IF NOT EXISTS users (
     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
