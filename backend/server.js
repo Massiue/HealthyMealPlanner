@@ -25,16 +25,26 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "nutri-plan-secret-key-2024";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
 const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
-const MYSQL_URI = process.env.MYSQL_URI || "";
+const MYSQL_URI = process.env.MYSQL_URI || process.env.AIVEN_MYSQL_URI || process.env.DATABASE_URL || "";
 const MYSQL_SSL_MODE = String(process.env.MYSQL_SSL_MODE || "REQUIRED").toUpperCase();
 
 const parseMysqlConfig = () => {
-  let host = process.env.MYSQL_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
-  let port = Number(process.env.MYSQL_PORT || 17627);
-  let user = process.env.MYSQL_USER || "avnadmin";
-  let password = process.env.MYSQL_PASSWORD || "";
-  let database = process.env.MYSQL_DATABASE || "defaultdb";
+  let host = process.env.MYSQL_HOST || process.env.DB_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
+  let port = Number(process.env.MYSQL_PORT || process.env.DB_PORT || 17627);
+  let user = process.env.MYSQL_USER || process.env.DB_USER || "avnadmin";
+  let password = process.env.MYSQL_PASSWORD || process.env.DB_PASSWORD || "";
+  let database = process.env.MYSQL_DATABASE || process.env.DB_NAME || "defaultdb";
   let source = "MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_DATABASE";
+
+  // Accept host values in "host:port" format from some dashboards.
+  if (!process.env.MYSQL_PORT && host.includes(":") && !host.startsWith("[")) {
+    const [hostOnly, portOnly] = host.split(":");
+    if (hostOnly && portOnly && /^\d+$/.test(portOnly)) {
+      host = hostOnly;
+      port = Number(portOnly);
+      source = "MYSQL_HOST(host:port)";
+    }
+  }
 
   if (MYSQL_URI) {
     let parsed;
@@ -45,7 +55,7 @@ const parseMysqlConfig = () => {
     }
 
     if (parsed.protocol !== "mysql:") {
-      throw new Error(`MYSQL_URI protocol must be mysql:, received ${parsed.protocol}`);
+      throw new Error(`MYSQL_URI protocol must be mysql:, received ${parsed.protocol}. Use Aiven MySQL URI, not PostgreSQL URI.`);
     }
 
     host = parsed.hostname || host;
@@ -1581,8 +1591,11 @@ const startServer = async () => {
     console.error("MySQL error code:", err?.code || "N/A");
 
     if (String(err?.code || "") === "ERR_OUT_OF_RANGE" || /offset/i.test(String(err?.message || ""))) {
-      console.error("Hint: This usually means mysql2 received a non-MySQL handshake.");
-      console.error("Check that you are using an Aiven MySQL service endpoint (not PostgreSQL/Redis) and the exact MySQL port from Aiven.");
+      console.error("Hint: mysql2 likely received a non-MySQL handshake.");
+      console.error("Use Aiven MySQL values only:");
+      console.error(" - MYSQL_URI=mysql://user:pass@host:port/database");
+      console.error("   OR MYSQL_HOST + MYSQL_PORT from the MySQL service page.");
+      console.error("Do NOT use PostgreSQL/Redis URI or endpoint.");
     }
 
     process.exit(1);
