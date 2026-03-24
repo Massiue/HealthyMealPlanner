@@ -18,17 +18,17 @@ const SQLITE_DB_PATH = process.env.SQLITE_DB_PATH || "./backend/nutriplan.db";
 const MIGRATE_TRUNCATE = String(process.env.MIGRATE_TRUNCATE || "false").toLowerCase() === "true";
 
 const parseMysqlConfig = () => {
-  let host = process.env.MYSQL_HOST || process.env.DB_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
-  let port = Number(process.env.MYSQL_PORT || process.env.DB_PORT || 17627);
-  let user = process.env.MYSQL_USER || process.env.DB_USER || "avnadmin";
+  let host = process.env.MYSQL_HOST || process.env.DB_HOST || "";
+  let portRaw = process.env.MYSQL_PORT || process.env.DB_PORT || "";
+  let user = process.env.MYSQL_USER || process.env.DB_USER || "";
   let password = process.env.MYSQL_PASSWORD || process.env.DB_PASSWORD || "";
-  let database = process.env.MYSQL_DATABASE || process.env.DB_NAME || "defaultdb";
+  let database = process.env.MYSQL_DATABASE || process.env.DB_NAME || "";
 
-  if (!process.env.MYSQL_PORT && host.includes(":") && !host.startsWith("[")) {
+  if (!portRaw && host.includes(":") && !host.startsWith("[")) {
     const [hostOnly, portOnly] = host.split(":");
     if (hostOnly && portOnly && /^\d+$/.test(portOnly)) {
       host = hostOnly;
-      port = Number(portOnly);
+      portRaw = portOnly;
     }
   }
 
@@ -41,22 +41,33 @@ const parseMysqlConfig = () => {
     }
 
     if (parsed.protocol !== "mysql:") {
-      throw new Error(`MYSQL_URI protocol must be mysql:, got ${parsed.protocol}`);
+      throw new Error("MYSQL_URI protocol must be mysql:, got " + parsed.protocol);
     }
 
     host = parsed.hostname || host;
-    port = parsed.port ? Number(parsed.port) : port;
+    portRaw = parsed.port || portRaw;
     user = parsed.username ? decodeURIComponent(parsed.username) : user;
     password = parsed.password ? decodeURIComponent(parsed.password) : password;
     const dbFromUri = parsed.pathname ? parsed.pathname.replace(/^\//, "") : "";
     database = dbFromUri || database;
   }
 
-  if (!host) throw new Error("Missing MySQL host");
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`Invalid MySQL port: ${port}`);
-  if (!user) throw new Error("Missing MySQL user");
-  if (!password) throw new Error("Missing MySQL password");
-  if (!database) throw new Error("Missing MySQL database");
+  const missing = [];
+  if (!host) missing.push("MYSQL_HOST");
+  if (!portRaw) missing.push("MYSQL_PORT");
+  if (!user) missing.push("MYSQL_USER");
+  if (!password) missing.push("MYSQL_PASSWORD");
+  if (!database) missing.push("MYSQL_DATABASE");
+  if (missing.length) throw new Error("Missing required MySQL environment variables: " + missing.join(", "));
+
+  if (host.includes(":") && !host.startsWith("[")) {
+    throw new Error("MYSQL_HOST must not contain a port. Put port in MYSQL_PORT.");
+  }
+
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error("Invalid MySQL port: " + portRaw);
+  }
 
   return { host, port, user, password, database };
 };
