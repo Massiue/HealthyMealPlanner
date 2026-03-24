@@ -10,7 +10,8 @@
     "dev:server": "node backend/server.js",
     "build": "vite build --config frontend/vite.config.ts",
     "preview": "vite preview --config frontend/vite.config.ts",
-    "start": "node backend/server.js"
+    "start": "node backend/server.js",
+    "migrate:sqlite:mysql": "node scripts/migrate-sqlite-to-mysql.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.21.0",
