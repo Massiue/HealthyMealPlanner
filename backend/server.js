@@ -31,28 +31,71 @@ const MYSQL_USER = process.env.MYSQL_USER || "avnadmin";
 const MYSQL_PASSWORD = process.env.MYSQL_PASSWORD || "";
 const MYSQL_DATABASE = process.env.MYSQL_DATABASE || "defaultdb";
 const MYSQL_SSL_MODE = String(process.env.MYSQL_SSL_MODE || "REQUIRED").toUpperCase();
-const MYSQL_SSL_CA_PATH = process.env.MYSQL_SSL_CA_PATH || path.join(__dirname, "aiven-ca.pem");
-const MYSQL_SSL_CA_FILE = path.isAbsolute(MYSQL_SSL_CA_PATH)
-  ? MYSQL_SSL_CA_PATH
-  : path.join(projectRoot, MYSQL_SSL_CA_PATH);
+const MYSQL_SSL_CA_PATH = process.env.MYSQL_SSL_CA_PATH || "./backend/aiven-ca.pem";
 const MYSQL_SSL_CA = process.env.MYSQL_SSL_CA || "";
+const MYSQL_SSL_REJECT_UNAUTHORIZED =
+  String(process.env.MYSQL_SSL_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
 
 app.use(cors());
 app.use(express.json());
 
 // -------------------- DB --------------------
-const loadMysqlCa = () => {
-  if (MYSQL_SSL_CA) return MYSQL_SSL_CA.replace(/\\n/g, "\n");
-  if (fs.existsSync(MYSQL_SSL_CA_FILE)) {
-    return fs.readFileSync(MYSQL_SSL_CA_FILE, "utf8");
+const resolveCaCandidates = () => {
+  const raw = String(MYSQL_SSL_CA_PATH || "").trim();
+  const candidates = [];
+
+  if (raw) {
+    if (path.isAbsolute(raw)) {
+      candidates.push(raw);
+    } else {
+      candidates.push(path.resolve(process.cwd(), raw));
+      candidates.push(path.resolve(projectRoot, raw));
+      candidates.push(path.resolve(__dirname, raw));
+    }
   }
-  return null;
+
+  candidates.push(path.resolve(process.cwd(), "backend/aiven-ca.pem"));
+  candidates.push(path.resolve(projectRoot, "backend/aiven-ca.pem"));
+  candidates.push(path.resolve(__dirname, "aiven-ca.pem"));
+
+  return [...new Set(candidates)];
 };
 
-const mysqlCa = loadMysqlCa();
-if (MYSQL_SSL_MODE === "REQUIRED" && !mysqlCa) {
-  console.error("MySQL SSL is REQUIRED but no CA certificate was found.");
-  console.error("Set MYSQL_SSL_CA or MYSQL_SSL_CA_PATH in your .env file.");
+const loadMysqlCa = () => {
+  if (MYSQL_SSL_CA) {
+    return {
+      ca: MYSQL_SSL_CA.replace(/\n/g, "\n"),
+      source: "MYSQL_SSL_CA env",
+    };
+  }
+
+  const candidates = resolveCaCandidates();
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    return {
+      ca: fs.readFileSync(candidate, "utf8"),
+      source: candidate,
+    };
+  }
+
+  return {
+    ca: null,
+    source: null,
+  };
+};
+
+const { ca: mysqlCa, source: mysqlCaSource } = loadMysqlCa();
+if (MYSQL_SSL_MODE === "REQUIRED") {
+  if (!mysqlCa) {
+    console.error("MySQL SSL is REQUIRED but no CA certificate was found.");
+    console.error("Tried path from MYSQL_SSL_CA_PATH:", MYSQL_SSL_CA_PATH);
+    for (const c of resolveCaCandidates()) {
+      console.error(" -", c);
+    }
+    console.error("Set MYSQL_SSL_CA_PATH correctly or provide MYSQL_SSL_CA inline.");
+  } else {
+    console.log("MySQL CA loaded from:", mysqlCaSource);
+  }
 }
 
 const pool = mysql.createPool({
@@ -68,7 +111,7 @@ const pool = mysql.createPool({
     ? {
         ssl: {
           ca: mysqlCa,
-          rejectUnauthorized: true,
+          rejectUnauthorized: MYSQL_SSL_REJECT_UNAUTHORIZED,
         },
       }
     : {}),
@@ -197,6 +240,10 @@ const ensureColumn = async (table, column, definition, options = {}) => {
 const initializeDatabase = async () => {
   if (!MYSQL_PASSWORD) {
     throw new Error("MYSQL_PASSWORD is missing. Set it in .env before starting backend.");
+  }
+
+  if (MYSQL_SSL_MODE === "REQUIRED" && !mysqlCa) {
+    throw new Error("MYSQL SSL is required but CA could not be loaded. Check MYSQL_SSL_CA_PATH.");
   }
 
   const connection = await pool.getConnection();
