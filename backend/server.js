@@ -246,6 +246,7 @@ const initializeDatabase = async () => {
     throw new Error("MYSQL SSL is required but CA could not be loaded. Check MYSQL_SSL_CA_PATH.");
   }
 
+  console.log(`MySQL target => host=${MYSQL_HOST} port=${MYSQL_PORT} db=${MYSQL_DATABASE} user=${MYSQL_USER} sslMode=${MYSQL_SSL_MODE}`);
   const connection = await pool.getConnection();
   connection.release();
   console.log(`Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}`);
@@ -1536,6 +1537,13 @@ const startServer = async () => {
     });
   } catch (err) {
     console.error("Failed to initialize MySQL:", err.message);
+    console.error("MySQL error code:", err?.code || "N/A");
+
+    if (String(err?.code || "") === "ERR_OUT_OF_RANGE" || /offset/i.test(String(err?.message || ""))) {
+      console.error("Hint: This usually means mysql2 received a non-MySQL handshake.");
+      console.error("Check that you are using an Aiven MySQL service endpoint (not PostgreSQL/Redis) and the exact MySQL port from Aiven.");
+    }
+
     process.exit(1);
   }
 };
