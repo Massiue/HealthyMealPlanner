@@ -1,6 +1,6 @@
 // server.js (FULL UPDATED)
 import express from "express";
-import sqlite3 from "sqlite3";
+import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cors from "cors";
@@ -14,27 +14,64 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
-const databasePath = path.join(__dirname, "nutriplan.db");
 const clientDistPath = path.join(projectRoot, "dist");
 const clientIndexPath = path.join(clientDistPath, "index.html");
 
 dotenv.config({ path: path.join(projectRoot, ".env.local") });
 dotenv.config({ path: path.join(projectRoot, ".env") });
-const sqlite = sqlite3.verbose();
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "nutri-plan-secret-key-2024";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
 const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+const MYSQL_HOST = process.env.MYSQL_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
+const MYSQL_PORT = Number(process.env.MYSQL_PORT || 17627);
+const MYSQL_USER = process.env.MYSQL_USER || "avnadmin";
+const MYSQL_PASSWORD = process.env.MYSQL_PASSWORD || "";
+const MYSQL_DATABASE = process.env.MYSQL_DATABASE || "defaultdb";
+const MYSQL_SSL_MODE = String(process.env.MYSQL_SSL_MODE || "REQUIRED").toUpperCase();
+const MYSQL_SSL_CA_PATH = process.env.MYSQL_SSL_CA_PATH || path.join(__dirname, "aiven-ca.pem");
+const MYSQL_SSL_CA_FILE = path.isAbsolute(MYSQL_SSL_CA_PATH)
+  ? MYSQL_SSL_CA_PATH
+  : path.join(projectRoot, MYSQL_SSL_CA_PATH);
+const MYSQL_SSL_CA = process.env.MYSQL_SSL_CA || "";
 
 app.use(cors());
 app.use(express.json());
 
 // -------------------- DB --------------------
-const db = new sqlite.Database(databasePath, (err) => {
-  if (err) console.error("Database error:", err.message);
-  else console.log("Connected to NutriPlan Database");
+const loadMysqlCa = () => {
+  if (MYSQL_SSL_CA) return MYSQL_SSL_CA.replace(/\\n/g, "\n");
+  if (fs.existsSync(MYSQL_SSL_CA_FILE)) {
+    return fs.readFileSync(MYSQL_SSL_CA_FILE, "utf8");
+  }
+  return null;
+};
+
+const mysqlCa = loadMysqlCa();
+if (MYSQL_SSL_MODE === "REQUIRED" && !mysqlCa) {
+  console.error("MySQL SSL is REQUIRED but no CA certificate was found.");
+  console.error("Set MYSQL_SSL_CA or MYSQL_SSL_CA_PATH in your .env file.");
+}
+
+const pool = mysql.createPool({
+  host: MYSQL_HOST,
+  port: MYSQL_PORT,
+  user: MYSQL_USER,
+  password: MYSQL_PASSWORD,
+  database: MYSQL_DATABASE,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  ...(MYSQL_SSL_MODE === "REQUIRED"
+    ? {
+        ssl: {
+          ca: mysqlCa,
+          rejectUnauthorized: true,
+        },
+      }
+    : {}),
 });
 
 const toStoredMealId = (meal) => {
@@ -72,115 +109,179 @@ const sanitizeUser = (row) => {
   };
 };
 
-db.serialize(() => {
-  const ensureColumn = (table, column, definition, options = {}) => {
-    db.all(`PRAGMA table_info(${table})`, (pragmaErr, columns) => {
-      if (pragmaErr) return console.error(`Schema lookup failed for ${table}:`, pragmaErr.message);
-      const exists = columns.some((col) => col.name === column);
-      if (exists) return;
-      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, (alterErr) => {
-        if (!alterErr) {
-          if (typeof options.afterAdd === "function") options.afterAdd();
-          return;
-        }
+const resolveDbArgs = (paramsOrCallback, maybeCallback) => {
+  if (typeof paramsOrCallback === "function") {
+    return {
+      params: [],
+      callback: paramsOrCallback,
+    };
+  }
 
-        if (/Cannot add a column with non-constant default/i.test(alterErr.message || "")) {
-          const fallbackDefinition = options.fallbackDefinition || definition.replace(/\s+DEFAULT\s+CURRENT_TIMESTAMP/i, "");
-          db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${fallbackDefinition}`, (fallbackErr) => {
-            if (fallbackErr) {
-              console.error(`Failed adding ${table}.${column}:`, fallbackErr.message);
-              return;
-            }
-            if (typeof options.afterAdd === "function") options.afterAdd();
-          });
-          return;
-        }
-
-        console.error(`Failed adding ${table}.${column}:`, alterErr.message);
-      });
-    });
+  return {
+    params: Array.isArray(paramsOrCallback) ? paramsOrCallback : [],
+    callback: maybeCallback,
   };
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    email TEXT UNIQUE,
-    password TEXT,
-    role TEXT DEFAULT 'user',
-    age INTEGER,
-    gender TEXT,
-    height REAL,
-    weight REAL,
-    activityLevel TEXT,
-    goal TEXT,
-    dailyCalories INTEGER
+};
+
+const db = {
+  serialize(callback) {
+    if (typeof callback === "function") callback();
+  },
+  run(sql, paramsOrCallback, maybeCallback) {
+    const { params, callback } = resolveDbArgs(paramsOrCallback, maybeCallback);
+    pool
+      .execute(sql, params)
+      .then(([result]) => {
+        const context = {
+          lastID: Number(result?.insertId || 0),
+          changes: Number(result?.affectedRows || 0),
+        };
+        if (typeof callback === "function") callback.call(context, null);
+      })
+      .catch((err) => {
+        if (typeof callback === "function") callback(err);
+        else console.error("DB run error:", err.message);
+      });
+  },
+  get(sql, paramsOrCallback, maybeCallback) {
+    const { params, callback } = resolveDbArgs(paramsOrCallback, maybeCallback);
+    pool
+      .execute(sql, params)
+      .then(([rows]) => {
+        if (typeof callback === "function") callback(null, rows?.[0] || undefined);
+      })
+      .catch((err) => {
+        if (typeof callback === "function") callback(err);
+        else console.error("DB get error:", err.message);
+      });
+  },
+  all(sql, paramsOrCallback, maybeCallback) {
+    const { params, callback } = resolveDbArgs(paramsOrCallback, maybeCallback);
+    pool
+      .execute(sql, params)
+      .then(([rows]) => {
+        if (typeof callback === "function") callback(null, rows || []);
+      })
+      .catch((err) => {
+        if (typeof callback === "function") callback(err);
+        else console.error("DB all error:", err.message);
+      });
+  },
+};
+
+const ensureColumn = async (table, column, definition, options = {}) => {
+  const [columns] = await pool.execute(
+    `SELECT COLUMN_NAME
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [MYSQL_DATABASE, table, column]
+  );
+
+  if (Array.isArray(columns) && columns.length > 0) return;
+
+  try {
+    await pool.execute(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+  } catch (alterErr) {
+    if (/default value/i.test(alterErr.message || "") && options.fallbackDefinition) {
+      await pool.execute(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${options.fallbackDefinition}`);
+    } else {
+      throw alterErr;
+    }
+  }
+
+  if (typeof options.afterAdd === "function") {
+    await options.afterAdd();
+  }
+};
+
+const initializeDatabase = async () => {
+  if (!MYSQL_PASSWORD) {
+    throw new Error("MYSQL_PASSWORD is missing. Set it in .env before starting backend.");
+  }
+
+  const connection = await pool.getConnection();
+  connection.release();
+  console.log(`Connected to MySQL at ${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}`);
+
+  await pool.execute(`CREATE TABLE IF NOT EXISTS users (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    email VARCHAR(255) UNIQUE,
+    password VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'user',
+    age INT,
+    gender VARCHAR(20),
+    height FLOAT,
+    weight FLOAT,
+    activityLevel VARCHAR(50),
+    goal VARCHAR(100),
+    dailyCalories INT
   )`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS meals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+  await pool.execute(`CREATE TABLE IF NOT EXISTS meals (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     mealName TEXT,
-    mealType TEXT,
-    calories INTEGER,
-    protein INTEGER,
-    dietTag TEXT,
-    imageUrl TEXT
+    mealType VARCHAR(50),
+    calories INT,
+    protein INT,
+    dietTag VARCHAR(100),
+    imageUrl LONGTEXT
   )`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS plans (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    date TEXT,
-    breakfast_id INTEGER,
-    lunch_id INTEGER,
-    dinner_id INTEGER,
-    waterIntake REAL DEFAULT 0,
-    FOREIGN KEY(user_id) REFERENCES users(id),
-    UNIQUE(user_id, date)
+  await pool.execute(`CREATE TABLE IF NOT EXISTS plans (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    date VARCHAR(20) NOT NULL,
+    breakfast_id VARCHAR(255),
+    lunch_id VARCHAR(255),
+    dinner_id VARCHAR(255),
+    waterIntake FLOAT DEFAULT 0,
+    UNIQUE KEY uniq_user_date (user_id, date),
+    CONSTRAINT fk_plans_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
 
-  db.run(`CREATE TABLE IF NOT EXISTS mock_meal_meta (
-    mockId TEXT PRIMARY KEY,
-    deleted INTEGER DEFAULT 0,
-    convertedMealId INTEGER,
-    updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+  await pool.execute(`CREATE TABLE IF NOT EXISTS mock_meal_meta (
+    mockId VARCHAR(255) PRIMARY KEY,
+    deleted TINYINT(1) DEFAULT 0,
+    convertedMealId INT,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )`);
 
-  ensureColumn("users", "dailyProtein", "INTEGER");
-  ensureColumn("users", "dailyWater", "REAL");
-  ensureColumn("users", "weightHistory", "TEXT");
-  ensureColumn("meals", "createdAt", "TEXT DEFAULT CURRENT_TIMESTAMP", {
-    fallbackDefinition: "TEXT",
-    afterAdd: () => {
-      db.run(`UPDATE meals SET createdAt = COALESCE(createdAt, CURRENT_TIMESTAMP) WHERE createdAt IS NULL`);
+  await ensureColumn("users", "dailyProtein", "INT");
+  await ensureColumn("users", "dailyWater", "FLOAT");
+  await ensureColumn("users", "weightHistory", "LONGTEXT");
+  await ensureColumn("meals", "createdAt", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP", {
+    fallbackDefinition: "TIMESTAMP NULL",
+    afterAdd: async () => {
+      await pool.execute(
+        `UPDATE meals
+         SET createdAt = COALESCE(createdAt, CURRENT_TIMESTAMP)
+         WHERE createdAt IS NULL`
+      );
     },
   });
-  ensureColumn("plans", "breakfast_data", "TEXT");
-  ensureColumn("plans", "lunch_data", "TEXT");
-  ensureColumn("plans", "dinner_data", "TEXT");
+  await ensureColumn("plans", "breakfast_data", "LONGTEXT");
+  await ensureColumn("plans", "lunch_data", "LONGTEXT");
+  await ensureColumn("plans", "dinner_data", "LONGTEXT");
 
-  // Force Sync Admin Account
   const adminEmail = process.env.ADMIN_EMAIL || "madhang285@gmail.com";
   const adminPass = process.env.ADMIN_PASS || "123";
+  const hashedPw = await bcrypt.hash(adminPass, 10);
+  const [rows] = await pool.execute(`SELECT id FROM users WHERE email = ?`, [adminEmail]);
 
-  db.get(`SELECT * FROM users WHERE email = ?`, [adminEmail], async (err, row) => {
-    if (err) return console.error("Admin lookup error:", err);
-
-    const hashedPw = await bcrypt.hash(adminPass, 10);
-    if (!row) {
-      db.run(
-        `INSERT INTO users (name, email, password, role, dailyCalories) VALUES (?, ?, ?, ?, ?)`,
-        ["System Admin", adminEmail, hashedPw, "admin", 2500],
-        (e) => e && console.error("Admin insert error:", e)
-      );
-    } else {
-      db.run(
-        `UPDATE users SET password = ?, role = ? WHERE email = ?`,
-        [hashedPw, "admin", adminEmail],
-        (e) => e && console.error("Admin update error:", e)
-      );
-    }
-  });
-});
-
+  if (Array.isArray(rows) && rows.length > 0) {
+    await pool.execute(`UPDATE users SET password = ?, role = ? WHERE email = ?`, [
+      hashedPw,
+      "admin",
+      adminEmail,
+    ]);
+  } else {
+    await pool.execute(
+      `INSERT INTO users (name, email, password, role, dailyCalories) VALUES (?, ?, ?, ?, ?)`,
+      ["System Admin", adminEmail, hashedPw, "admin", 2500]
+    );
+  }
+};
 // -------------------- Email --------------------
 const EMAIL_USER = process.env.EMAIL_USER;
 const EMAIL_PASS = process.env.EMAIL_PASS;
@@ -1174,14 +1275,14 @@ app.put("/api/plans/:date", authenticate, (req, res) => {
   db.run(
     `INSERT INTO plans (user_id, date, breakfast_id, lunch_id, dinner_id, waterIntake, breakfast_data, lunch_data, dinner_data)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(user_id, date) DO UPDATE SET
-       breakfast_id = excluded.breakfast_id,
-       lunch_id = excluded.lunch_id,
-       dinner_id = excluded.dinner_id,
-       waterIntake = excluded.waterIntake,
-       breakfast_data = excluded.breakfast_data,
-       lunch_data = excluded.lunch_data,
-       dinner_data = excluded.dinner_data`,
+     ON DUPLICATE KEY UPDATE
+       breakfast_id = VALUES(breakfast_id),
+       lunch_id = VALUES(lunch_id),
+       dinner_id = VALUES(dinner_id),
+       waterIntake = VALUES(waterIntake),
+       breakfast_data = VALUES(breakfast_data),
+       lunch_data = VALUES(lunch_data),
+       dinner_data = VALUES(dinner_data)`,
     [
       req.user.id,
       date,
@@ -1302,9 +1403,9 @@ app.post("/api/admin/mock-meals/convert", authenticate, adminOnly, (req, res) =>
   db.run(
     `INSERT INTO mock_meal_meta (mockId, deleted, convertedMealId, updatedAt)
      VALUES (?, 1, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(mockId) DO UPDATE SET
-       deleted = 1,
-       convertedMealId = excluded.convertedMealId,
+     ON DUPLICATE KEY UPDATE
+       deleted = VALUES(deleted),
+       convertedMealId = VALUES(convertedMealId),
        updatedAt = CURRENT_TIMESTAMP`,
     [String(mockId), Number(convertedMealId)],
     (err) => {
@@ -1323,9 +1424,9 @@ app.post("/api/admin/mock-meals/delete", authenticate, adminOnly, (req, res) => 
   db.run(
     `INSERT INTO mock_meal_meta (mockId, deleted, convertedMealId, updatedAt)
      VALUES (?, 1, NULL, CURRENT_TIMESTAMP)
-     ON CONFLICT(mockId) DO UPDATE SET
-       deleted = 1,
-       convertedMealId = NULL,
+     ON DUPLICATE KEY UPDATE
+       deleted = VALUES(deleted),
+       convertedMealId = VALUES(convertedMealId),
        updatedAt = CURRENT_TIMESTAMP`,
     [String(mockId)],
     (err) => {
@@ -1380,6 +1481,16 @@ app.use((req, res, next) => {
   next();
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend Server: http://localhost:${PORT}`);
-});
+const startServer = async () => {
+  try {
+    await initializeDatabase();
+    app.listen(PORT, () => {
+      console.log(`Backend Server: http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error("Failed to initialize MySQL:", err.message);
+    process.exit(1);
+  }
+};
+
+startServer();

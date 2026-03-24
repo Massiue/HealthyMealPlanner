@@ -21,13 +21,13 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.542.0",
     "motion": "^12.23.24",
+    "mysql2": "^3.20.0",
     "nodemailer": "^8.0.1",
     "nodemon": "^3.1.14",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.13.0",
-    "sqlite3": "^5.1.7"
+    "react-router-dom": "^7.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
