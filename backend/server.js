@@ -29,19 +29,19 @@ const MYSQL_URI = process.env.MYSQL_URI || process.env.AIVEN_MYSQL_URI || proces
 const MYSQL_SSL_MODE = String(process.env.MYSQL_SSL_MODE || "REQUIRED").toUpperCase();
 
 const parseMysqlConfig = () => {
-  let host = process.env.MYSQL_HOST || process.env.DB_HOST || "nutriplan-db-nutriplan-db.c.aivencloud.com";
-  let port = Number(process.env.MYSQL_PORT || process.env.DB_PORT || 17627);
-  let user = process.env.MYSQL_USER || process.env.DB_USER || "avnadmin";
+  let host = process.env.MYSQL_HOST || process.env.DB_HOST || "";
+  let portRaw = process.env.MYSQL_PORT || process.env.DB_PORT || "";
+  let user = process.env.MYSQL_USER || process.env.DB_USER || "";
   let password = process.env.MYSQL_PASSWORD || process.env.DB_PASSWORD || "";
-  let database = process.env.MYSQL_DATABASE || process.env.DB_NAME || "defaultdb";
+  let database = process.env.MYSQL_DATABASE || process.env.DB_NAME || "";
   let source = "MYSQL_HOST/MYSQL_PORT/MYSQL_USER/MYSQL_DATABASE";
 
   // Accept host values in "host:port" format from some dashboards.
-  if (!process.env.MYSQL_PORT && host.includes(":") && !host.startsWith("[")) {
+  if (!portRaw && host.includes(":") && !host.startsWith("[")) {
     const [hostOnly, portOnly] = host.split(":");
     if (hostOnly && portOnly && /^\d+$/.test(portOnly)) {
       host = hostOnly;
-      port = Number(portOnly);
+      portRaw = portOnly;
       source = "MYSQL_HOST(host:port)";
     }
   }
@@ -55,11 +55,11 @@ const parseMysqlConfig = () => {
     }
 
     if (parsed.protocol !== "mysql:") {
-      throw new Error(`MYSQL_URI protocol must be mysql:, received ${parsed.protocol}. Use Aiven MySQL URI, not PostgreSQL URI.`);
+      throw new Error("MYSQL_URI protocol must be mysql:, received " + parsed.protocol + ". Use Aiven MySQL URI, not PostgreSQL URI.");
     }
 
     host = parsed.hostname || host;
-    port = parsed.port ? Number(parsed.port) : port;
+    portRaw = parsed.port || portRaw;
     user = parsed.username ? decodeURIComponent(parsed.username) : user;
     password = parsed.password ? decodeURIComponent(parsed.password) : password;
     const dbFromUri = parsed.pathname ? parsed.pathname.replace(/^\//, "") : "";
@@ -71,21 +71,33 @@ const parseMysqlConfig = () => {
     }
   }
 
-  if (!host) throw new Error("MYSQL host is missing. Set MYSQL_HOST or MYSQL_URI.");
+  const missing = [];
+  if (!host) missing.push("MYSQL_HOST");
+  if (!portRaw) missing.push("MYSQL_PORT");
+  if (!user) missing.push("MYSQL_USER");
+  if (!password) missing.push("MYSQL_PASSWORD");
+  if (!database) missing.push("MYSQL_DATABASE");
+
+  if (missing.length) {
+    throw new Error("Missing required MySQL environment variables: " + missing.join(", "));
+  }
+
   if (host.includes(":") && !host.startsWith("[")) {
     throw new Error("MYSQL_HOST must not contain a port. Put port in MYSQL_PORT.");
   }
+
+  const port = Number(portRaw);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`MYSQL_PORT is invalid: ${port}`);
+    throw new Error("MYSQL_PORT is invalid: " + portRaw);
   }
-  if (!user) throw new Error("MYSQL user is missing. Set MYSQL_USER or MYSQL_URI.");
-  if (!password) throw new Error("MYSQL password is missing. Set MYSQL_PASSWORD or MYSQL_URI.");
-  if (!database) throw new Error("MYSQL database is missing. Set MYSQL_DATABASE or MYSQL_URI.");
 
   return { host, port, user, password, database, source };
 };
-
 const DB_CONFIG = parseMysqlConfig();
+console.log("MYSQL_HOST:", DB_CONFIG.host);
+console.log("MYSQL_PORT:", DB_CONFIG.port);
+console.log("MYSQL_USER:", DB_CONFIG.user);
+console.log("MYSQL_DATABASE:", DB_CONFIG.database);
 const MYSQL_SSL_CA_PATH = process.env.MYSQL_SSL_CA_PATH || "./backend/aiven-ca.pem";
 const MYSQL_SSL_CA = process.env.MYSQL_SSL_CA || "";
 const MYSQL_SSL_REJECT_UNAUTHORIZED =
