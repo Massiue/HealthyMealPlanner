@@ -25,3 +25,6 @@ frontend/dist
 *.sw?
 .env
 .env.local
+
+backend/uploads/*
+!backend/uploads/.gitkeep

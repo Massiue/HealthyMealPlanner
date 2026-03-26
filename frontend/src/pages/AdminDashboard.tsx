@@ -26,6 +26,15 @@ const readJsonSafely = async (response: Response) => {
   }
 };
 
+const resolveAssetUrl = (url: string) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+  const apiOrigin = API_BASE.replace(/\/api\/?$/, '');
+  const normalizedPath = url.startsWith('/') ? url : '/' + url;
+  return apiOrigin + normalizedPath;
+};
+
 const AdminDashboard: React.FC = () => {
   const getToken = () => localStorage.getItem('nutriplan_token') || '';
   const { user: currentUser, meals, addGlobalMeal, removeGlobalMeal } = useContext(AuthContext);
@@ -38,7 +47,9 @@ const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'stats' | 'users' | 'meals'>('stats');
   const [notification, setNotification] = useState<string | null>(null);
   const [newMeal, setNewMeal] = useState<Partial<Meal>>(EMPTY_MEAL);
-  
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [uploadedDocumentUrl, setUploadedDocumentUrl] = useState('');
+
 
   const stats = {
     userCount: users.length,
@@ -169,6 +180,68 @@ const AdminDashboard: React.FC = () => {
       showNotification(`Access level updated to ${newRole.toUpperCase()}`);
     } catch {
       showNotification('Error updating role.');
+    }
+  };
+
+  const handleAssetUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf']);
+    if (!allowedTypes.has(file.type)) {
+      showNotification('Unsupported file type. Upload image (jpg/png/webp/gif) or PDF only.');
+      return;
+    }
+
+    const maxSizeBytes = 8 * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      showNotification('File exceeds 8MB limit.');
+      return;
+    }
+
+    setIsUploadingFile(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read selected file.'));
+        reader.readAsDataURL(file);
+      });
+
+      const contentBase64 = dataUrl.split(',')[1] || '';
+      const response = await fetch(API_BASE + '/admin/uploads', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + getToken(),
+        },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          contentBase64,
+        }),
+      });
+
+      const { data, raw } = await readJsonSafely(response);
+      if (!response.ok || !data?.success || !data?.url) {
+        const details = raw?.trim() ? ' Server response: ' + raw.trim().slice(0, 160) : '';
+        showNotification(data?.error || ('Upload failed.' + details));
+        return;
+      }
+
+      const uploadedUrl = resolveAssetUrl(String(data.url));
+      if (String(file.type).startsWith('image/')) {
+        setNewMeal((prev) => ({ ...prev, imageUrl: uploadedUrl }));
+        showNotification('Image uploaded successfully and linked to this meal.');
+      } else {
+        setUploadedDocumentUrl(uploadedUrl);
+        showNotification('PDF uploaded successfully.');
+      }
+    } catch {
+      showNotification('Upload failed. Please try again.');
+    } finally {
+      setIsUploadingFile(false);
     }
   };
 
@@ -432,6 +505,27 @@ const AdminDashboard: React.FC = () => {
                     placeholder="https://images.unsplash.com/..."
                     className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none"
                   />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1">Upload Image / PDF</label>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+                    onChange={handleAssetUpload}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-2 ml-1">Max 8MB. Images auto-fill Photo URL. PDFs are uploaded and linked below.</p>
+                  {isUploadingFile && <p className="text-[11px] text-emerald-600 font-semibold mt-2 ml-1">Uploading file...</p>}
+                  {uploadedDocumentUrl && (
+                    <a
+                      href={uploadedDocumentUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-blue-600 font-semibold mt-2 ml-1 inline-block break-all"
+                    >
+                      Open uploaded PDF
+                    </a>
+                  )}
                 </div>
                 {isEditingMeal ? (
                   <div className="flex gap-2 mt-4">
